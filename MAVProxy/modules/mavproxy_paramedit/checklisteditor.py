@@ -4,16 +4,16 @@ import wx.grid as gridlib
 import math
 
 
-class GridCheckListEditor(gridlib.PyGridCellEditor):
+class GridCheckListEditor(gridlib.GridCellEditor):
     """
     This is a custom CheckListBox editor for setting of Bitmasks
     """
     def __init__(self, choice, pvalcol, start):
+        super(GridCheckListEditor, self).__init__()
         self.choices = choice
         binary = bin(int(start))[2:]
         self.startValue = [(len(binary)-ones-1) for ones in range(len(binary)) if binary[ones] == '1']
         self.pvalcol = pvalcol
-        gridlib.PyGridCellEditor.__init__(self)
 
     def set_checked(self, selected):
         if int(selected) < int(math.pow(2, len(self.choices))):
@@ -78,15 +78,15 @@ class GridCheckListEditor(gridlib.PyGridCellEditor):
         return GridCheckListEditor(self.choices, self.pvalcol, self.startValue)
 
 
-class GridDropListEditor(gridlib.PyGridCellEditor):
+class GridDropListEditor(gridlib.GridCellEditor):
     """
     This is a custom DropBox editor for setting of Parameter Values
     """
     def __init__(self, choice, pvalcol, start=0):
+        super(GridDropListEditor, self).__init__()
         self.choices = choice
         self.startValue = int(start)
         self.pvalcol = pvalcol
-        gridlib.PyGridCellEditor.__init__(self)
 
     def set_checked(self, selected):
         self.startValue = int(selected)
@@ -140,15 +140,15 @@ class GridDropListEditor(gridlib.PyGridCellEditor):
         return GridDropListEditor(self.choices, self.pvalcol, self.startValue)
 
 
-class GridScrollEditor(gridlib.PyGridCellEditor):
+class GridScrollEditor(gridlib.GridCellEditor):
     """
     This is a custom SpinControlDouble editor for setting of float values with given range and increments
     """
     def __init__(self, Range, pvalcol, start):
+        super(GridScrollEditor, self).__init__()
         self.Range = Range
         self.startValue = float(start)
         self.pvalcol = pvalcol
-        gridlib.PyGridCellEditor.__init__(self)
 
     def set_checked(self, selected):
         self.startValue = selected
@@ -158,8 +158,8 @@ class GridScrollEditor(gridlib.PyGridCellEditor):
             print (e)
 
     def SetSize(self, rect):
-        self._tc.SetDimensions(rect.x, rect.y, rect.width+2, 30,
-                               wx.SIZE_ALLOW_MINUS_ONE)
+        self._tc.SetSize(rect.x, rect.y, rect.width+2, 30,
+                         wx.SIZE_ALLOW_MINUS_ONE)
 
     def get_checked(self):
         return self._tc.GetValue()
