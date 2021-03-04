@@ -153,7 +153,8 @@ class GridScrollEditor(gridlib.GridCellEditor):
     def set_checked(self, selected):
         self.startValue = selected
         try:
-            self._tc.SetValue(selected)
+            if self.IsCreated():
+                self._tc.SetValue(selected)
         except Exception as e:
             print (e)
 
