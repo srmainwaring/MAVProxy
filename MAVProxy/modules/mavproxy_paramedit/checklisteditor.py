@@ -2,9 +2,12 @@
 import wx
 import wx.grid as gridlib
 import math
+import sys
 
+# Python2 / Python3 compat
+GridCellEditor = gridlib.GridCellEditor if sys.version_info[0] >=3 else gridlib.PyGridCellEditor
 
-class GridCheckListEditor(gridlib.GridCellEditor):
+class GridCheckListEditor(GridCellEditor):
     """
     This is a custom CheckListBox editor for setting of Bitmasks
     """
@@ -78,7 +81,7 @@ class GridCheckListEditor(gridlib.GridCellEditor):
         return GridCheckListEditor(self.choices, self.pvalcol, self.startValue)
 
 
-class GridDropListEditor(gridlib.GridCellEditor):
+class GridDropListEditor(GridCellEditor):
     """
     This is a custom DropBox editor for setting of Parameter Values
     """
@@ -140,7 +143,7 @@ class GridDropListEditor(gridlib.GridCellEditor):
         return GridDropListEditor(self.choices, self.pvalcol, self.startValue)
 
 
-class GridScrollEditor(gridlib.GridCellEditor):
+class GridScrollEditor(GridCellEditor):
     """
     This is a custom SpinControlDouble editor for setting of float values with given range and increments
     """
