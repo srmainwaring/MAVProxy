@@ -20,6 +20,7 @@ class CamTrackModule(mp_module.MPModule):
         )
 
         # GUI
+        # TODO: provide args to set RTSP server location
         rtsp_url = "rtsp://127.0.0.1:8554/camera"
         self.camera_view = CameraView(title="Camera Tracking", rtsp_url=rtsp_url)
 
@@ -61,6 +62,7 @@ class CamTrackModule(mp_module.MPModule):
         """Check for events on the camera view"""
         self.camera_view.check_events()
 
+        # TODO: check which shutdown events are available in MPImage
         # tell mavproxy to unload the module if the GUI is closed
         # if self.camera_view.close_event.wait(timeout=0.001):
         #     self.needs_unloading = True
@@ -69,6 +71,7 @@ class CamTrackModule(mp_module.MPModule):
         """Send message list via pipe to GUI at desired update rate"""
         if (time.time() - self._last_send) > self._send_delay:
             # pipe data to GUI
+            # TODO: check interface in view for pipe updates
             # self.camera_view.parent_pipe_send.send(self._msg_list)
 
             # reset counters etc

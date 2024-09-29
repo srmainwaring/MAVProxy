@@ -17,6 +17,7 @@ class CameraView:
     """Handle a camera view"""
 
     def __init__(self, title, rtsp_url, fps=30):
+        # TODO: retrieve frame shape from frame
         self.frame_width = 640
         self.frame_height = 480
 
@@ -28,17 +29,18 @@ class CameraView:
             title=title,
             mouse_events=True,
             mouse_movement_events=False,
-            # width=self.frame_width,
-            # height=self.frame_height,
+            width=self.frame_width,
+            height=self.frame_height,
             key_events=True,
             can_drag=False,
             can_zoom=False,
             auto_size=False,
             auto_fit=True,
-            # fps=fps,
+            fps=fps,
         )
 
         # Capture video
+        # TODO: provide args to set gstreamer pipeline
         gst_pipeline = (
             f"rtspsrc location={self.rtsp_url} latency=50 "
             "! decodebin "

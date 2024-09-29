@@ -100,6 +100,7 @@ class TrackerImagePanel(MPImagePanel):
         if self.raw_img is None:
             return
         self.tracker = None
+        # TODO: add support to switch trackers
         # tracker = TrackerDlibCorrelation()
         tracker = TrackerCSTR()
         tracker.start_track(self.raw_img, box)
@@ -184,6 +185,7 @@ class TrackerCSTR:
 
     def __init__(self):
         self._tracker = cv2.legacy.TrackerCSRT_create()
+        # TODO: check if None would be better (do callers handle this?)
         self._tracker_pos = TrackerPos(0, 0, 0, 0)
 
     def start_track(self, raw_image, box):
