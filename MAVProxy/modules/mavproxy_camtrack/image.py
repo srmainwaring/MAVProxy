@@ -2,6 +2,7 @@
 Override tracker in MPImage
 """
 
+import cv2
 import dlib
 import time
 
@@ -99,7 +100,8 @@ class TrackerImagePanel(MPImagePanel):
         if self.raw_img is None:
             return
         self.tracker = None
-        tracker = DlibCorrelationTracker()
+        # tracker = TrackerDlibCorrelation()
+        tracker = TrackerCSTR()
         tracker.start_track(self.raw_img, box)
         self.tracker = tracker
 
@@ -149,11 +151,11 @@ class Tracker:
         return TrackerPos(0, 0, 0, 0)
 
 
-class DlibCorrelationTracker:
+class TrackerDlibCorrelation:
     """Wrapper for the dlib correlation tracker"""
 
     def __init__(self):
-        self.tracker = dlib.correlation_tracker()
+        self._tracker = dlib.correlation_tracker()
 
     def start_track(self, raw_image, box):
         maxx = raw_image.shape[1] - 1
@@ -164,11 +166,40 @@ class DlibCorrelationTracker:
             min(int(box.x + box.width / 2), maxx),
             min(int(box.y + box.height / 2), maxy),
         )
-        self.tracker.start_track(raw_image, rect)
+        self._tracker.start_track(raw_image, rect)
 
     def update(self, frame):
-        self.tracker.update(frame)
+        self._tracker.update(frame)
 
     def get_position(self):
-        pos = self.tracker.get_position()
-        return TrackerPos(pos.left(), pos.right(), pos.top(), pos.bottom())
+        pos = self._tracker.get_position()
+        tracker_pos = TrackerPos(pos.left(), pos.right(), pos.top(), pos.bottom())
+        return tracker_pos
+
+
+class TrackerCSTR:
+    """
+    Wrapper for cv2.legacy.TrackerCSRT
+    """
+
+    def __init__(self):
+        self._tracker = cv2.legacy.TrackerCSRT_create()
+        self._tracker_pos = TrackerPos(0, 0, 0, 0)
+
+    def start_track(self, raw_image, box):
+        self._tracker = cv2.legacy.TrackerCSRT_create()
+        x = max(int(box.x), 0)
+        y = max(int(box.y), 0)
+        w = min(int(box.width), max(raw_image.shape[1] - x, 1))
+        h = min(int(box.height), max(raw_image.shape[0] - y, 1))
+        rect = [x, y, w, h]
+        self._tracker.init(raw_image, rect)
+
+    def update(self, frame):
+        success, box = self._tracker.update(frame)
+        if success:
+            (x, y, w, h) = [v for v in box]
+            self._tracker_pos = TrackerPos(x, x + w, y, y + h)
+
+    def get_position(self):
+        return self._tracker_pos
