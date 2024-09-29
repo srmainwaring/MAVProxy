@@ -10,6 +10,8 @@ from MAVProxy.modules.lib.mp_menu import MPMenuItem
 from MAVProxy.modules.lib.mp_image import MPImageTrackPos
 from MAVProxy.modules.lib.mp_image import MPImageFrameCounter
 
+from MAVProxy.modules.mavproxy_camtrack.image import TrackerImage
+
 
 class CameraView:
     """Handle a camera view"""
@@ -22,7 +24,7 @@ class CameraView:
         self.rtsp_url = rtsp_url
         self.tracking = False
 
-        self.im = MPImage(
+        self.im = TrackerImage(
             # title=title,
             mouse_events=True,
             mouse_movement_events=False,
@@ -85,7 +87,7 @@ class CameraView:
                 continue
             if isinstance(event, MPImageFrameCounter):
                 self.frame_counter = event.frame
-                continue            
+                continue
             if (
                 hasattr(event, "ClassName")
                 and event.ClassName == "wxMouseEvent"
@@ -96,7 +98,7 @@ class CameraView:
                     (xres, yres) = (event.shape[1], event.shape[0])
                     twidth = int(yres * 0.01 * track_size_pct)
                     self.end_tracking()
-            
+
                     self.im.start_tracker(event.X, event.Y, twidth, twidth)
                     self.tracking = True
                 elif event.controlDown:

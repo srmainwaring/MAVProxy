@@ -2,12 +2,13 @@
 MAVProxy camera tracking module
 """
 
+import time
+
 from MAVProxy.modules.lib import mp_module
 from MAVProxy.modules.lib import mp_util
+from MAVProxy.modules.mavproxy_camtrack.camera_view import CameraView
 
 from pymavlink import mavutil
-
-from MAVProxy.modules.mavproxy_camtrack.camera_view import CameraView
 
 
 class CamTrackModule(mp_module.MPModule):
@@ -68,7 +69,7 @@ class CamTrackModule(mp_module.MPModule):
         """Send message list via pipe to GUI at desired update rate"""
         if (time.time() - self._last_send) > self._send_delay:
             # pipe data to GUI
-            self.camera_view.parent_pipe_send.send(self._msg_list)
+            # self.camera_view.parent_pipe_send.send(self._msg_list)
 
             # reset counters etc
             self._msg_list = []
