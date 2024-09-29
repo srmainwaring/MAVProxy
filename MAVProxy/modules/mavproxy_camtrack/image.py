@@ -2,6 +2,7 @@
 Override tracker in MPImage
 """
 
+import dlib
 import time
 
 from MAVProxy.modules.lib import wx_processguard
@@ -16,6 +17,8 @@ from MAVProxy.modules.lib.mp_image import MPImagePanel
 
 
 class TrackerImage(MPImage):
+    """An MPImage class that allows the tracker type to be overridden"""
+
     def __init__(
         self,
         title="MPImage",
@@ -49,10 +52,9 @@ class TrackerImage(MPImage):
         )
 
     def child_task(self):
-        """child process - this holds all the GUI elements"""
+        """Child process - this holds all the GUI elements"""
         mp_util.child_close_fds()
 
-        # print("TrackerImage")
         state = self
 
         self.app = wx.App(False)
@@ -62,11 +64,10 @@ class TrackerImage(MPImage):
 
 
 class TrackerImageFrame(wx.Frame):
-    """The main frame of the viewer"""
+    """Main frame for an image with object tracking"""
 
     def __init__(self, state):
         wx.Frame.__init__(self, None, wx.ID_ANY, state.title)
-        # print("TrackerImageFrame")
         self.state = state
         state.frame = self
         self.last_layout_send = time.time()
@@ -88,52 +89,86 @@ class TrackerImageFrame(wx.Frame):
 
 
 class TrackerImagePanel(MPImagePanel):
+    """An MPImagePanel that allows the tracker type to be overridden"""
+
     def __init__(self, parent, state):
         super(TrackerImagePanel, self).__init__(parent, state)
-        # print("TrackerImagePanel")
 
-    def start_tracker(self, obj):
-        '''start a tracker on an object identified by a box'''
+    def start_tracker(self, box):
+        """Start a tracker on an object identified by a box"""
         if self.raw_img is None:
             return
         self.tracker = None
-        # print("starting tracker...")
-        import dlib
-        maxx = self.raw_img.shape[1]-1
-        maxy = self.raw_img.shape[0]-1
-        rect = dlib.rectangle(max(int(obj.x-obj.width/2),0),
-                              max(int(obj.y-obj.height/2),0),
-                              min(int(obj.x+obj.width/2),maxx),
-                              min(int(obj.y+obj.height/2),maxy))
-        tracker = dlib.correlation_tracker()
-        tracker.start_track(self.raw_img, rect)
+        tracker = DlibCorrelationTracker()
+        tracker.start_track(self.raw_img, box)
         self.tracker = tracker
 
+
+class TrackerPos:
+    """Rectangle output by a tracker [(left, top), (right, bottom)]"""
+
+    def __init__(self, left, right, top, bottom):
+        self._left = left
+        self._right = right
+        self._top = top
+        self._bottom = bottom
+
+    def left(self):
+        """Rectangle left coordinate (x1)"""
+        return self._left
+
+    def right(self):
+        """Rectangle right coordinate (x2)"""
+        return self._right
+
+    def top(self):
+        """Rectangle top coordinate (y1)"""
+        return self._top
+
+    def bottom(self):
+        """Rectangle bottom coordinate (y2)"""
+        return self._bottom
+
+
 class Tracker:
+    """Interface for trackers used by the MPImage class"""
+
     def __init__(self):
         pass
 
+    def start_track(self, raw_image, box):
+        """Start the tracker"""
+        pass
 
-    # def start_tracker(self, obj):
-    #     """
-    #     Bind a different tracker
-    #
-    #     tracker.update(frame)
-    #     tracker.get_position(): -> pos
-    #       x1 = pos.left()
-    #       y1 = pos.top()
-    #       x2 = pos.right()
-    #       y2 = pos.bottom()
-    #
-    #     obj is a box
-    #       x = obj.x
-    #       y = obj.y
-    #       w = obj.width
-    #       h = obj.height
-    #
-    #     """
-    #     print("using overloaded tracker")
-    #     if self.raw_img is None:
-    #         return
-    #     self.tracker = None
+    def update(self, frame):
+        """Update the tracker"""
+        pass
 
+    def get_position(self):
+        """Return a rectangle at the position of the tracked object"""
+        return TrackerPos(0, 0, 0, 0)
+
+
+class DlibCorrelationTracker:
+    """Wrapper for the dlib correlation tracker"""
+
+    def __init__(self):
+        self.tracker = dlib.correlation_tracker()
+
+    def start_track(self, raw_image, box):
+        maxx = raw_image.shape[1] - 1
+        maxy = raw_image.shape[0] - 1
+        rect = dlib.rectangle(
+            max(int(box.x - box.width / 2), 0),
+            max(int(box.y - box.height / 2), 0),
+            min(int(box.x + box.width / 2), maxx),
+            min(int(box.y + box.height / 2), maxy),
+        )
+        self.tracker.start_track(raw_image, rect)
+
+    def update(self, frame):
+        self.tracker.update(frame)
+
+    def get_position(self):
+        pos = self.tracker.get_position()
+        return TrackerPos(pos.left(), pos.right(), pos.top(), pos.bottom())
