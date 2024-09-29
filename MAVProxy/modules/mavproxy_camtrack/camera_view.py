@@ -25,7 +25,7 @@ class CameraView:
         self.tracking = False
 
         self.im = TrackerImage(
-            # title=title,
+            title=title,
             mouse_events=True,
             mouse_movement_events=False,
             # width=self.frame_width,

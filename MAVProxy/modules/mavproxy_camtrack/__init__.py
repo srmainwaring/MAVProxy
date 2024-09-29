@@ -21,7 +21,7 @@ class CamTrackModule(mp_module.MPModule):
 
         # GUI
         rtsp_url = "rtsp://127.0.0.1:8554/camera"
-        self.camera_view = CameraView(title="Camera", rtsp_url=rtsp_url)
+        self.camera_view = CameraView(title="Camera Tracking", rtsp_url=rtsp_url)
 
         # mavlink messages
 
