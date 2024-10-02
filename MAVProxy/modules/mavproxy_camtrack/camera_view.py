@@ -10,7 +10,7 @@ from MAVProxy.modules.lib.mp_menu import MPMenuItem
 from MAVProxy.modules.lib.mp_image import MPImageTrackPos
 from MAVProxy.modules.lib.mp_image import MPImageFrameCounter
 
-from MAVProxy.modules.mavproxy_camtrack.image import TrackerImage
+from MAVProxy.modules.mavproxy_camtrack.tracker_image import TrackerImage
 
 
 class CameraView:
