@@ -102,7 +102,8 @@ class TrackerImagePanel(MPImagePanel):
         self.tracker = None
         # TODO: add support to switch trackers
         # tracker = TrackerDlibCorrelation()
-        tracker = TrackerCSTR()
+        # tracker = TrackerCSTR()
+        tracker = TrackerMAVLink()
         tracker.start_track(self.raw_img, box)
         self.tracker = tracker
 
@@ -202,6 +203,35 @@ class TrackerCSTR:
         if success:
             (x, y, w, h) = [v for v in box]
             self._tracker_pos = TrackerPos(x, x + w, y, y + h)
+
+    def get_position(self):
+        return self._tracker_pos
+
+
+class TrackerMAVLink:
+    """
+    MAVLink tracker (i.e. runs on a MAVLink gimbal or companion computer)
+    """
+
+    def __init__(self):
+        self._tracker_pos = TrackerPos(0, 0, 0, 0)
+
+    def start_track(self, raw_image, box):
+        x = max(int(box.x), 0)
+        y = max(int(box.y), 0)
+        w = min(int(box.width), max(raw_image.shape[1] - x, 1))
+        h = min(int(box.height), max(raw_image.shape[0] - y, 1))
+
+        # normalised rectangle
+        top_left_x = x / w
+        top_left_y = y / h
+        bottom_right_x = (x + box.width) / w
+        bottom_right_y = (y + box.height) / h
+        self._tracker_pos = TrackerPos(x, x + w, y, y + h)
+        print("Starting MAVLink tracker")
+
+    def update(self, frame):
+        pass
 
     def get_position(self):
         return self._tracker_pos
