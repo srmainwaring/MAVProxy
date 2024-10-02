@@ -66,17 +66,26 @@ class CameraView:
         """Check if the GUI process is alive"""
         return self.im.is_alive()
 
-    def start_tracking(self):
-        """Start object tracking"""
-        self.tracking = True
-        if self.im is not None:
-            self.im.start_tracking()
+    # def start_tracking(self):
+    #     """Start object tracking"""
+    #     self.tracking = True
+    #     if self.im is not None:
+    #         self.im.start_tracking()
 
-    def end_tracking(self):
-        """End object tracking"""
-        self.tracking = False
-        if self.im is not None:
-            self.im.end_tracking()
+    # def end_tracking(self):
+    #     """End object tracking"""
+    #     self.tracking = False
+    #     if self.im is not None:
+    #         self.im.end_tracking()
+
+    def start_track_point(self, point):
+        print("start_track_point")
+
+    def start_track_rectangle(self, rectangle):
+        print("start_track_rectangle")
+
+    def stop_tracking(self):
+        print("stop_tracking")
 
     def check_events(self):
         """Check for events"""
