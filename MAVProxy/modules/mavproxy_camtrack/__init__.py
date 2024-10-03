@@ -304,6 +304,76 @@ class CamTrackModule(mp_module.MPModule):
         elif mtype == "CAMERA_INFORMATION":
             self.handle_camera_information(msg)
 
+        elif mtype == "CAMERA_TRACKING_IMAGE_STATUS":
+            print(msg)
+
+
+        # check command_ack
+        elif mtype == "COMMAND_ACK":
+            if msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
+                if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+                    print("Camera track point accepted")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_TEMPORARILY_REJECTED:
+                    print("Camera track point rejected")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_DENIED:
+                    print("Camera track point denied")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_UNSUPPORTED:
+                    print("Camera track point unsupported")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_FAILED:
+                    print("Camera track point failed")
+                else:
+                    print("Camera track point result: {}".format(msg.result))
+
+            elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_RECTANGLE:
+                if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+                    print("Camera track rectangle accepted")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_TEMPORARILY_REJECTED:
+                    print("Camera track rectangle rejected")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_DENIED:
+                    print("Camera track rectangle denied")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_UNSUPPORTED:
+                    print("Camera track rectangle unsupported")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_FAILED:
+                    print("Camera track rectangle failed")
+                else:
+                    print("Camera track rectangle result: {}".format(msg.result))
+
+            elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_STOP_TRACKING:
+                if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+                    print("Camera stop tracking accepted")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_TEMPORARILY_REJECTED:
+                    print("Camera stop tracking rejected")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_DENIED:
+                    print("Camera stop tracking denied")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_UNSUPPORTED:
+                    print("Camera stop tracking unsupported")
+                elif msg.result == mavutil.mavlink.MAV_RESULT_FAILED:
+                    print("Camera stop tracking failed")
+                else:
+                    print("Camera stop tracking result: {}".format(msg.result))
+
+            elif msg.command == mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL:
+                print("ACK: MAV_CMD_SET_MESSAGE_INTERVAL")
+                print(msg)
+
+            # msg.command
+            # msg.result
+            # msg.progress
+            # msg.target_system
+            # msg.target_component
+
+        # check command_long
+        elif mtype == "COMMAND_LONG":
+            print(msg)
+            # TODO: check target_system is for offboard control
+            if msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
+                print(msg)
+            elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_RECTANGLE:
+                print(msg)
+            elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_STOP_TRACKING:
+                print(msg)
+
+
     def handle_heartbeat(self, msg):
         sysid = msg.get_srcSystem()
         compid = msg.get_srcComponent()
