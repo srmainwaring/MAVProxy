@@ -36,12 +36,11 @@ class CameraView:
         # autopilot component may proxy up to 6 cameras
         self.camera_sysid = 1
         self.camera_compid = mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER
-        self.camera_deviceid = 1 # first autopilot attached camera
+        self.camera_deviceid = 1  # first autopilot attached camera
 
         self.gimbal_sysid = 1
         self.gimbal_compid = 1
-        self.gimbal_deviceid = 1 # first autopilot attached gimbal
-
+        self.gimbal_deviceid = 1  # first autopilot attached gimbal
 
         self.im = TrackerImage(
             title=title,
@@ -135,7 +134,7 @@ class CameraView:
         tgt_sys = self.camera_sysid
         tgt_comp = self.camera_compid
         print(
-            "send_camera_track_point: tgt_sys: {}, tgt_comp: {}".format(
+            "Send COMMAND_LONG: CAMERA_TRACK_POINT: tgt_sys: {}, tgt_comp: {}".format(
                 tgt_sys, tgt_comp
             )
         )
@@ -168,7 +167,7 @@ class CameraView:
         tgt_sys = self.camera_sysid
         tgt_comp = self.camera_compid
         print(
-            "send_camera_track_rectangle: tgt_sys: {}, tgt_comp: {}".format(
+            "Send COMMAND_LONG: CAMERA_TRACK_RECTANGLE: tgt_sys: {}, tgt_comp: {}".format(
                 tgt_sys, tgt_comp
             )
         )
@@ -199,7 +198,7 @@ class CameraView:
         tgt_sys = self.camera_sysid
         tgt_comp = self.camera_compid
         print(
-            "send_camera_stop_tracking: tgt_sys: {}, tgt_comp: {}".format(
+            "Send COMMAND_LONG: CAMERA_STOP_TRACKING: tgt_sys: {}, tgt_comp: {}".format(
                 tgt_sys, tgt_comp
             )
         )
@@ -226,9 +225,8 @@ class CameraView:
         tgt_sys = self.camera_sysid
         tgt_comp = self.camera_compid
         print(
-            "set_message_interval_image_status: tgt_sys: {}, tgt_comp: {}".format(
-                tgt_sys, tgt_comp
-            )
+            "Send COMMAND_LONG: SET_MESSAGE_INTERVAL: CAMERA_TRACKING_IMAGE_STATUS: "
+            "tgt_sys: {}, tgt_comp: {}".format(tgt_sys, tgt_comp)
         )
         message_id = mavutil.mavlink.CAMERA_TRACKING_IMAGE_STATUS
         interval = 0  # default rate
