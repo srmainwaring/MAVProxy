@@ -6,6 +6,27 @@ import threading
 import time
 from pymavlink import mavutil
 
+# TODO: convert to a Python Enum.
+# Define CAMERA_CAP_FLAGS as constants
+CAMERA_CAP_FLAGS_CAPTURE_VIDEO = 1  # Camera is able to record video
+CAMERA_CAP_FLAGS_CAPTURE_IMAGE = 2  # Camera is able to capture images
+CAMERA_CAP_FLAGS_HAS_MODES = 4  # Camera has separate Video and Image/Photo modes
+CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE = (
+    8  # Camera can capture images while in video mode
+)
+CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE = (
+    16  # Camera can capture videos while in Photo/Image mode
+)
+CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE = 32  # Camera has image survey mode
+CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM = 64  # Camera has basic zoom control
+CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS = 128  # Camera has basic focus control
+CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM = 256  # Camera has video streaming capabilities
+CAMERA_CAP_FLAGS_HAS_TRACKING_POINT = 512  # Camera supports tracking of a point
+CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE = (
+    1024  # Camera supports tracking of a selection rectangle
+)
+CAMERA_CAP_FLAGS_HAS_TRACKING_GEO_STATUS = 2048  # Camera supports tracking geo status
+
 
 class CameraTrackController:
     def __init__(self, ip, port, sysid, compid):
@@ -14,6 +35,16 @@ class CameraTrackController:
         self.sysid = sysid
         self.compid = compid
         self.connection = None
+
+        # camera information
+        self.vendor_name = "SIYI"
+        self.model_name = "A8"
+        self.focal_length = float("nan")
+        self.sensor_size_h = float("nan")
+        self.sensor_size_v = float("nan")
+        self.resolution_h = 0
+        self.resolution_v = 0
+        self.gimbal_device_id = 1
 
         print(
             "Camera Track Controller (sysid: {}, compid: {})".format(
@@ -56,8 +87,55 @@ class CameraTrackController:
             )
             time.sleep(1)
 
+    def send_camera_information(self):
+        """
+        AP_Camera must receive camera information, including capability flags,
+        before it will accept tracking requests.
+
+        If MAV_CMD_CAMERA_TRACK_POINT or MAV_CMD_CAMERA_TRACK_RECTANGLE result
+        in ACK UNSUPPORTED, then this may not have been sent.
+        """
+        flags = (
+            CAMERA_CAP_FLAGS_CAPTURE_VIDEO
+            | CAMERA_CAP_FLAGS_CAPTURE_IMAGE
+            | CAMERA_CAP_FLAGS_HAS_MODES
+            | CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE
+            | CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE
+            | CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE
+            | CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM
+            | CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS
+            | CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM
+            | CAMERA_CAP_FLAGS_HAS_TRACKING_POINT
+            | CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE
+            | CAMERA_CAP_FLAGS_HAS_TRACKING_GEO_STATUS
+        )
+
+        def to_uint8_t(string):
+            string_encode = string.encode("utf-8")
+            return string_encode + b"\0" * (32 - len(string))
+
+        # print(to_uint8_t(self.vendor_name), len(to_uint8_t(self.vendor_name)))
+
+        self.connection.mav.camera_information_send(
+            int(time.time() * 1000) & 0xFFFFFFFF,  # time_boot_ms
+            to_uint8_t(self.vendor_name),  # vendor_name
+            to_uint8_t(self.model_name),  # model_name
+            (1 << 24) | (0 << 16) | (0 << 8) | 1,  # firmware_version
+            self.focal_length,  # focal_length
+            self.sensor_size_h,  # sensor_size_h
+            self.sensor_size_v,  # sensor_size_v
+            self.resolution_h,  # resolution_h
+            self.resolution_v,  # resolution_v
+            0,  # lens_id
+            flags,  # flags
+            0,  # cam_definition_version
+            b"",  # cam_definition_uri
+            self.gimbal_device_id,  # gimbal_device_id
+        )
+        print("Sent camera information")
+
     def handle_camera_track_point(self, msg):
-        print("Received MAV_CMD_CAMERA_TRACK_POINT")
+        print("Got COMMAND_LONG: CAMERA_TRACK_POINT")
         # These are already floats
         norm_x = msg.param1
         norm_y = msg.param2
@@ -65,7 +143,7 @@ class CameraTrackController:
         print(f"Track point: x: {norm_x}, y: {norm_y}, radius: {radius}")
 
     def handle_camera_track_rectangle(self, msg):
-        print("Received MAV_CMD_CAMERA_TRACK_RECTANGLE")
+        print("Got COMMAND_LONG: CAMERA_TRACK_RECTANGLE")
         # These should remain as floats (normalized coordinates)
         norm_x = msg.param1
         norm_y = msg.param2
@@ -76,10 +154,11 @@ class CameraTrackController:
         )
 
     def handle_camera_stop_tracking(self, msg):
-        print("Received MAV_CMD_CAMERA_STOP_TRACKING")
+        print("Got COMMAND_LONG: CAMERA_STOP_TRACKING")
 
     def run(self):
         self.connect_to_mavlink()
+        self.send_camera_information()
 
         # Start the heartbeat thread
         heartbeat_thread = threading.Thread(target=self.send_heartbeat)
@@ -88,20 +167,18 @@ class CameraTrackController:
 
         while True:
             msg = self.connection.recv_match(type="COMMAND_LONG", blocking=True)
-            if msg and msg.get_type() == "COMMAND_LONG":
-                # print(msg)
-                print(f"target_system: {msg.target_system}, sys: {self.sysid}")
-                if msg.target_system == self.sysid:
-                    if msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
-                        self.handle_camera_track_point(msg)
-                    elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_RECTANGLE:
-                        self.handle_camera_track_rectangle(msg)
-                    elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_STOP_TRACKING:
-                        self.handle_camera_stop_tracking(msg)
-                    else:
-                        print(msg.command)
+            mtype = msg.get_type()
+            if msg and mtype == "COMMAND_LONG":
+                if msg.target_system != self.sysid:
+                    continue
+                elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
+                    self.handle_camera_track_point(msg)
+                elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_RECTANGLE:
+                    self.handle_camera_track_rectangle(msg)
+                elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_STOP_TRACKING:
+                    self.handle_camera_stop_tracking(msg)
                 else:
-                    print("Received but not for us")
+                    print(msg.command)
 
             # Rate limit
             time.sleep(0.01)
