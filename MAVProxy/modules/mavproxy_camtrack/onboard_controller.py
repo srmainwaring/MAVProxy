@@ -4,28 +4,36 @@ Onboard controller for camera tracking
 
 import threading
 import time
+
+from enum import Enum
 from pymavlink import mavutil
 
-# TODO: convert to a Python Enum.
-# Define CAMERA_CAP_FLAGS as constants
-CAMERA_CAP_FLAGS_CAPTURE_VIDEO = 1  # Camera is able to record video
-CAMERA_CAP_FLAGS_CAPTURE_IMAGE = 2  # Camera is able to capture images
-CAMERA_CAP_FLAGS_HAS_MODES = 4  # Camera has separate Video and Image/Photo modes
-CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE = (
-    8  # Camera can capture images while in video mode
-)
-CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE = (
-    16  # Camera can capture videos while in Photo/Image mode
-)
-CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE = 32  # Camera has image survey mode
-CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM = 64  # Camera has basic zoom control
-CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS = 128  # Camera has basic focus control
-CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM = 256  # Camera has video streaming capabilities
-CAMERA_CAP_FLAGS_HAS_TRACKING_POINT = 512  # Camera supports tracking of a point
-CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE = (
-    1024  # Camera supports tracking of a selection rectangle
-)
-CAMERA_CAP_FLAGS_HAS_TRACKING_GEO_STATUS = 2048  # Camera supports tracking geo status
+
+class CameraCapFlags(Enum):
+    # Camera is able to record video
+    CAPTURE_VIDEO = 1
+    # Camera is able to capture images
+    CAPTURE_IMAGE = 2
+    # Camera has separate Video and Image/Photo modes
+    HAS_MODES = 4
+    # Camera can capture images while in video mode
+    CAN_CAPTURE_IMAGE_IN_VIDEO_MODE = 8
+    # Camera can capture videos while in Photo/Image mode
+    CAN_CAPTURE_VIDEO_IN_IMAGE_MODE = 16
+    # Camera has image survey mode
+    HAS_IMAGE_SURVEY_MODE = 32
+    # Camera has basic zoom control
+    HAS_BASIC_ZOOM = 64
+    # Camera has basic focus control
+    HAS_BASIC_FOCUS = 128
+    # Camera has video streaming capabilities
+    HAS_VIDEO_STREAM = 256
+    # Camera supports tracking of a point
+    HAS_TRACKING_POINT = 512
+    # Camera supports tracking of a selection rectangle
+    HAS_TRACKING_RECTANGLE = 1024
+    # Camera supports tracking geo status
+    HAS_TRACKING_GEO_STATUS = 2048
 
 
 class CameraTrackController:
@@ -96,18 +104,18 @@ class CameraTrackController:
         in ACK UNSUPPORTED, then this may not have been sent.
         """
         flags = (
-            CAMERA_CAP_FLAGS_CAPTURE_VIDEO
-            | CAMERA_CAP_FLAGS_CAPTURE_IMAGE
-            | CAMERA_CAP_FLAGS_HAS_MODES
-            | CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE
-            | CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE
-            | CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE
-            | CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM
-            | CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS
-            | CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM
-            | CAMERA_CAP_FLAGS_HAS_TRACKING_POINT
-            | CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE
-            | CAMERA_CAP_FLAGS_HAS_TRACKING_GEO_STATUS
+            CameraCapFlags.CAPTURE_VIDEO.value
+            | CameraCapFlags.CAPTURE_IMAGE.value
+            | CameraCapFlags.HAS_MODES.value
+            | CameraCapFlags.CAN_CAPTURE_IMAGE_IN_VIDEO_MODE.value
+            | CameraCapFlags.CAN_CAPTURE_VIDEO_IN_IMAGE_MODE.value
+            | CameraCapFlags.HAS_IMAGE_SURVEY_MODE.value
+            | CameraCapFlags.HAS_BASIC_ZOOM.value
+            | CameraCapFlags.HAS_BASIC_FOCUS.value
+            | CameraCapFlags.HAS_VIDEO_STREAM.value
+            | CameraCapFlags.HAS_TRACKING_POINT.value
+            | CameraCapFlags.HAS_TRACKING_RECTANGLE.value
+            | CameraCapFlags.HAS_TRACKING_GEO_STATUS.value
         )
 
         def to_uint8_t(string):
