@@ -187,8 +187,6 @@ pymavlink camera commands
 - camera_tracking_geo_status_send
 - camera_tracking_image_status_send
 - camera_trigger_send
-
-
 """
 
 import time
@@ -210,10 +208,12 @@ class CamTrackModule(mp_module.MPModule):
             mpstate, "camtrack", "camera tracking module"
         )
 
+        self.mpstate = mpstate
+
         # GUI
         # TODO: provide args to set RTSP server location
         rtsp_url = "rtsp://127.0.0.1:8554/camera"
-        self.camera_view = CameraView(title="Camera Tracking", rtsp_url=rtsp_url)
+        self.camera_view = CameraView(self.mpstate, "Camera Tracking", rtsp_url)
 
         # mavlink messages
         self._last_gimbal_device_information = None
@@ -417,18 +417,6 @@ class CamTrackModule(mp_module.MPModule):
             0,  # param6
             gimbal_devid,  # param7
         )
-
-    def send_camera_track_point(self):
-        # MAV_CMD_CAMERA_TRACK_POINT
-        pass
-
-    def send_camera_track_rectangle(self):
-        # MAV_CMD_CAMERA_TRACK_RECTANGLE
-        pass
-
-    def send_camera_stop_tracking(self):
-        # MAV_CMD_CAMERA_STOP_TRACKING
-        pass
 
     # MAVProxy.modules.mavproxy_misc.py
     def send_request_message(self, message_id, p1=0):
