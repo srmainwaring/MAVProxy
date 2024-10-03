@@ -23,7 +23,6 @@ class CameraView:
 
         self.frame_counter = -1
         self.rtsp_url = rtsp_url
-        self.tracking = False
 
         self.im = TrackerImage(
             title=title,
@@ -66,27 +65,6 @@ class CameraView:
         """Check if the GUI process is alive"""
         return self.im.is_alive()
 
-    # def start_tracking(self):
-    #     """Start object tracking"""
-    #     self.tracking = True
-    #     if self.im is not None:
-    #         self.im.start_tracking()
-
-    # def end_tracking(self):
-    #     """End object tracking"""
-    #     self.tracking = False
-    #     if self.im is not None:
-    #         self.im.end_tracking()
-
-    def start_track_point(self, point):
-        print("start_track_point")
-
-    def start_track_rectangle(self, rectangle):
-        print("start_track_rectangle")
-
-    def stop_tracking(self):
-        print("stop_tracking")
-
     def check_events(self):
         """Check for events"""
         if self.im is None:
@@ -99,6 +77,13 @@ class CameraView:
             if isinstance(event, MPImageFrameCounter):
                 self.frame_counter = event.frame
                 continue
+
+            # if isinstance(event, MPImageTrackPoint):
+            #     continue
+
+            # if isinstance(event, MPImageTrackRectangle):
+            #     continue
+
             if (
                 hasattr(event, "ClassName")
                 and event.ClassName == "wxMouseEvent"
@@ -108,12 +93,10 @@ class CameraView:
                 if event.shiftDown:
                     (xres, yres) = (event.shape[1], event.shape[0])
                     twidth = int(yres * 0.01 * track_size_pct)
-                    self.end_tracking()
-
+                    self.im.end_tracking()
                     self.im.start_tracker(event.X, event.Y, twidth, twidth)
-                    self.tracking = True
                 elif event.controlDown:
-                    self.end_tracking()
+                    self.im.end_tracking()
                 else:
                     pass
 

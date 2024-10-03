@@ -4,6 +4,7 @@ Override tracker in MPImage
 
 import cv2
 import dlib
+import threading
 import time
 
 from MAVProxy.modules.lib import wx_processguard
@@ -100,10 +101,11 @@ class TrackerImagePanel(MPImagePanel):
         if self.raw_img is None:
             return
         self.tracker = None
-        # TODO: add support to switch trackers
-        # tracker = TrackerDlibCorrelation()
-        # tracker = TrackerCSTR()
-        tracker = TrackerMAVLink()
+        # TODO: accept tracker name as option
+        # tracker_name = "dlib_correlation"
+        # tracker_name = "cv2_cstr"
+        tracker_name = "mavlink"
+        tracker = create_tracker(tracker_name, self.state)
         tracker.start_track(self.raw_img, box)
         self.tracker = tracker
 
@@ -137,8 +139,8 @@ class TrackerPos:
 class Tracker:
     """Interface for trackers used by the MPImage class"""
 
-    def __init__(self):
-        pass
+    def __init__(self, state):
+        self.state = state
 
     def start_track(self, raw_image, box):
         """Start the tracker"""
@@ -153,10 +155,11 @@ class Tracker:
         return TrackerPos(0, 0, 0, 0)
 
 
-class TrackerDlibCorrelation:
+class TrackerDlibCorrelation(Tracker):
     """Wrapper for the dlib correlation tracker"""
 
-    def __init__(self):
+    def __init__(self, state):
+        super().__init__(state)
         self._tracker = dlib.correlation_tracker()
 
     def start_track(self, raw_image, box):
@@ -179,12 +182,13 @@ class TrackerDlibCorrelation:
         return tracker_pos
 
 
-class TrackerCSTR:
+class TrackerCSTR(Tracker):
     """
     Wrapper for cv2.legacy.TrackerCSRT
     """
 
-    def __init__(self):
+    def __init__(self, state):
+        super().__init__(state)
         self._tracker = cv2.legacy.TrackerCSRT_create()
         # TODO: check if None would be better (do callers handle this?)
         self._tracker_pos = TrackerPos(0, 0, 0, 0)
@@ -208,12 +212,14 @@ class TrackerCSTR:
         return self._tracker_pos
 
 
-class TrackerMAVLink:
+class TrackerMAVLink(Tracker):
     """
     MAVLink tracker (i.e. runs on a MAVLink gimbal or companion computer)
     """
 
-    def __init__(self):
+    def __init__(self, state):
+        super(TrackerMAVLink, self).__init__(state)
+        self.event_queue = state.out_queue
         self._tracker_pos = TrackerPos(0, 0, 0, 0)
 
     def start_track(self, raw_image, box):
@@ -228,10 +234,36 @@ class TrackerMAVLink:
         bottom_right_x = (x + box.width) / w
         bottom_right_y = (y + box.height) / h
         self._tracker_pos = TrackerPos(x, x + w, y, y + h)
-        print("Starting MAVLink tracker")
+
+        # print("Starting MAVLink tracker")
+        # self.event_queue.put(
+        #     TrackerImageEvent(
+        #         TrackerImageEventType.TRACK_RECTANGLE,
+        #         track_rectangle=[
+        #             top_left_x,
+        #             top_left_y,
+        #             bottom_right_x,
+        #             bottom_right_y,
+        #         ],
+        #     )
+        # )
 
     def update(self, frame):
         pass
 
     def get_position(self):
         return self._tracker_pos
+
+
+def create_tracker(name, state):
+    """
+    Factory method to create a tracker.
+    """
+    if name == "dlib_correlation":
+        return TrackerDlibCorrelation(state)
+    elif name == "cv2_cstr":
+        return TrackerCSTR(state)
+    elif name == "mavlink":
+        return TrackerMAVLink(state)
+    else:
+        return TrackerDlibCorrelation(state)
