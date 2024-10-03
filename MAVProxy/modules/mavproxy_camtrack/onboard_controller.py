@@ -23,7 +23,9 @@ class CameraTrackController:
 
     def connect_to_mavlink(self):
         self.connection = mavutil.mavlink_connection(
-            f"udp:{self.ip}:{self.port}", source_system=self.sysid
+            f"udp:{self.ip}:{self.port}",
+            source_system=self.sysid,
+            source_component=self.compid,
         )
         print("Searching for vehicle")
         while not self.connection.probably_vehicle_heartbeat(
@@ -54,6 +56,28 @@ class CameraTrackController:
             )
             time.sleep(1)
 
+    def handle_camera_track_point(self, msg):
+        print("Received MAV_CMD_CAMERA_TRACK_POINT")
+        # These are already floats
+        norm_x = msg.param1
+        norm_y = msg.param2
+        radius = msg.param3
+        print(f"Track point: x: {norm_x}, y: {norm_y}, radius: {radius}")
+
+    def handle_camera_track_rectangle(self, msg):
+        print("Received MAV_CMD_CAMERA_TRACK_RECTANGLE")
+        # These should remain as floats (normalized coordinates)
+        norm_x = msg.param1
+        norm_y = msg.param2
+        norm_w = msg.param3
+        norm_h = msg.param4
+        print(
+            f"Track rectangle: x: {norm_x}, y: {norm_y}, " f"w: {norm_w}, h: {norm_h}"
+        )
+
+    def handle_camera_stop_tracking(self, msg):
+        print("Received MAV_CMD_CAMERA_STOP_TRACKING")
+
     def run(self):
         self.connect_to_mavlink()
 
@@ -63,15 +87,21 @@ class CameraTrackController:
         heartbeat_thread.start()
 
         while True:
-            # msg = self.connection.recv_match(type='COMMAND_LONG', blocking=True)
-            # if msg and msg.get_type() == 'COMMAND_LONG':
-            #     if msg.target_system == self.sysid:
-            #         if msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
-            #             self.handle_camera_track_point(msg)
-            #         elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_RECTANGLE:
-            #             self.handle_camera_track_rectangle(msg)
-            #     else:
-            #         print("Received but not for us")
+            msg = self.connection.recv_match(type="COMMAND_LONG", blocking=True)
+            if msg and msg.get_type() == "COMMAND_LONG":
+                # print(msg)
+                print(f"target_system: {msg.target_system}, sys: {self.sysid}")
+                if msg.target_system == self.sysid:
+                    if msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
+                        self.handle_camera_track_point(msg)
+                    elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_RECTANGLE:
+                        self.handle_camera_track_rectangle(msg)
+                    elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_STOP_TRACKING:
+                        self.handle_camera_stop_tracking(msg)
+                    else:
+                        print(msg.command)
+                else:
+                    print("Received but not for us")
 
             # Rate limit
             time.sleep(0.01)
