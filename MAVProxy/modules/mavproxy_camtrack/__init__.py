@@ -438,7 +438,8 @@ class CamTrackModule(mp_module.MPModule):
             self._msg_list = []
             self._last_send = time.time()
 
-        if (time.time() - self._heartbeat_last_send) > self._heartbeat_delay:
+        # TODO: implement camera and gimbal discovery correctly
+        if False: #(time.time() - self._heartbeat_last_send) > self._heartbeat_delay:
             # NOTE: response sent by GCS_MAVLINK::try_send_message
             self.send_request_message(
                 mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_MANAGER_INFORMATION
