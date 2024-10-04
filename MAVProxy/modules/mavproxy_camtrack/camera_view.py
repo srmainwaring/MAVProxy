@@ -116,7 +116,15 @@ class CameraView:
                     self.send_camera_stop_tracking()
 
                     self.im.start_tracker(event.X, event.Y, twidth, twidth)
-                    self.send_camera_track_rectangle()
+
+                    # TODO: move / encapsulate
+                    top_left_x = event.X / self.frame_width
+                    top_left_y = event.Y / self.frame_height
+                    bot_right_x = (event.X + twidth) / self.frame_width
+                    bot_right_y = (event.Y + twidth) / self.frame_height
+                    self.send_camera_track_rectangle(
+                        top_left_x, top_left_y, bot_right_x, bot_right_y
+                    )
 
                 elif event.controlDown:
                     self.im.end_tracking()
@@ -124,12 +132,13 @@ class CameraView:
                 else:
                     pass
 
-    # Camera tracking commands. Commumication is GCS -> FC
+    # Camera tracking commands. Communication is GCS -> FC
 
-    # def send_camera_track_point(self, point_x, point_y, radius):
-    def send_camera_track_point(self):
+    def send_camera_track_point(self, point_x, point_y, radius):
         """
         https://mavlink.io/en/messages/common.html#MAV_CMD_CAMERA_TRACK_POINT
+
+        NOTE: point coords and radius are normalised to [0, 1]
         """
         tgt_sys = self.camera_sysid
         tgt_comp = self.camera_compid
@@ -138,10 +147,6 @@ class CameraView:
                 tgt_sys, tgt_comp
             )
         )
-        # point coords and radius are normalised to [0, 1]
-        point_x = 0.5
-        point_y = 0.5
-        radius = 0.1
         target_camera = 0
         self.mpstate.master().mav.command_long_send(
             tgt_sys,  # target_system
@@ -157,12 +162,13 @@ class CameraView:
             0,  # param7
         )
 
-    # def send_camera_track_rectangle(
-    #     self, top_left_x, top_left_y, bottom_right_x, bottom_right_y
-    # ):
-    def send_camera_track_rectangle(self):
+    def send_camera_track_rectangle(
+        self, top_left_x, top_left_y, bottom_right_x, bottom_right_y
+    ):
         """
         https://mavlink.io/en/messages/common.html#MAV_CMD_CAMERA_TRACK_RECTANGLE
+
+        NOTE: coordinates are normalised to [0, 1]
         """
         tgt_sys = self.camera_sysid
         tgt_comp = self.camera_compid
@@ -171,11 +177,6 @@ class CameraView:
                 tgt_sys, tgt_comp
             )
         )
-        # rectangle coords are normalised to [0, 1]
-        top_left_x = 0.5
-        top_left_y = 0.5
-        bottom_right_x = 0.7
-        bottom_right_y = 0.7
         target_camera = 0
         self.mpstate.master().mav.command_long_send(
             tgt_sys,  # target_system
