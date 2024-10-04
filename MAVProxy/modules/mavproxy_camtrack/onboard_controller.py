@@ -515,13 +515,9 @@ class GimbalController:
         self._tracking = False
 
         # TODO: add options for PI controller gains
-        # PI controllers
-        # SIYI A8
-        # self._pitch_controller = PI_controller(Pgain=0.1, Igain=0.01, IMAX=1.0)
-        # self._yaw_controller = PI_controller(Pgain=0.1, Igain=0.01, IMAX=1.0)
-        # Gazebo simulation
-        self._pitch_controller = PI_controller(Pgain=0.3, Igain=0.01, IMAX=1.0)
-        self._yaw_controller = PI_controller(Pgain=0.3, Igain=0.01, IMAX=1.0)
+        # PI controllers: SIYI A8: 0.1, Gazebo: 0.3
+        self._pitch_controller = PI_controller(Pgain=0.5, Igain=0.01, IMAX=1.0)
+        self._yaw_controller = PI_controller(Pgain=0.5, Igain=0.01, IMAX=1.0)
 
         # Start the move gimbal thread
         self._gimbal_thread = threading.Thread(target=self._move_gimbal_task)
@@ -577,12 +573,14 @@ class GimbalController:
                     0.0, 0.0, float("nan"), float("nan")
                 )
             else:
-                if math.isclose(centre_x, 0.0) and math.isclose(centre_y, 0.0):
+                if centre_x == 0.0 and centre_y == 0.0:
                     diff_x = 0.0
                     diff_y = 0.0
                 else:
                     diff_x = (centre_x - (width / 2)) / 2
                     diff_y = -(centre_y - (height / 2)) / 2
+
+                print(f"diff_x: {diff_x}, diff_y: {diff_y}")
 
                 err_pitch = math.radians(diff_y)
                 pitch_rate_rads = self._pitch_controller.run(err_pitch)
@@ -662,15 +660,15 @@ class TrackerCSTR:
 
         if self._nroi_changed:
             self._tracker = cv2.legacy.TrackerCSRT_create()
-            # denomalise the roi
+            # denormalise the roi
             height, width, _ = frame.shape
             roi = [
-                int(self._nroi[0] * width),
-                int(self._nroi[1] * height),
-                int(self._nroi[2] * width),
-                int(self._nroi[3] * height),
+                int(self._nroi[0] * width), # x
+                int(self._nroi[1] * height), # y
+                int(self._nroi[2] * width), # w
+                int(self._nroi[3] * height), # h
             ]
-            print(f"TrackerCSTRL: ROI: {roi}")
+            print(f"TrackerCSTR: ROI: {roi}")
             self._tracker.init(frame, roi)
             self._nroi_changed = False
 
