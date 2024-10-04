@@ -3,7 +3,10 @@ Onboard controller for camera tracking
 """
 
 import copy
+import cv2
+import gi
 import math
+import numpy as np
 import threading
 import time
 
@@ -11,6 +14,9 @@ from enum import Enum
 from pymavlink import mavutil
 
 from MAVProxy.modules.lib import mp_util
+
+gi.require_version("Gst", "1.0")
+from gi.repository import Gst
 
 
 class CameraCapFlags(Enum):
@@ -41,37 +47,37 @@ class CameraCapFlags(Enum):
 
 
 class OnboardController:
-    def __init__(self, ip, port, sysid, compid):
-        self.ip = ip
-        self.port = port
-        self.sysid = sysid
-        self.compid = compid
-        self.connection = None
+    def __init__(self, mavlink_ip, mavlink_port, sysid, compid, rtsp_url):
+        self._mavlink_ip = mavlink_ip
+        self._mavlink_port = mavlink_port
+        self._sysid = sysid
+        self._compid = compid
+        self._rtsp_url = rtsp_url
+        self._connection = None
 
         print(
-            "Onboard Controller (sysid: {}, compid: {})".format(self.sysid, self.compid)
+            "Onboard Controller (sysid: {}, compid: {})".format(
+                self._sysid, self._compid
+            )
         )
-
-        self.camera_controller = None
-        self.gimbal_controller = None
 
     def connect_to_mavlink(self):
-        self.connection = mavutil.mavlink_connection(
-            f"udp:{self.ip}:{self.port}",
-            source_system=self.sysid,
-            source_component=self.compid,
+        self._connection = mavutil.mavlink_connection(
+            f"udp:{self._mavlink_ip}:{self._mavlink_port}",
+            source_system=self._sysid,
+            source_component=self._compid,
         )
         print("Searching for vehicle")
-        while not self.connection.probably_vehicle_heartbeat(
-            self.connection.wait_heartbeat()
+        while not self._connection.probably_vehicle_heartbeat(
+            self._connection.wait_heartbeat()
         ):
             print(".", end="")
 
         print("Found vehicle")
-        self.connection.wait_heartbeat()
+        self._connection.wait_heartbeat()
         print(
             "Heartbeat received (system: {} component: {})".format(
-                self.connection.target_system, self.connection.target_component
+                self._connection.target_system, self._connection.target_component
             )
         )
 
@@ -80,7 +86,7 @@ class OnboardController:
         Send heartbeat identifying this as an onboard controller.
         """
         while True:
-            self.connection.mav.heartbeat_send(
+            self._connection.mav.heartbeat_send(
                 type=mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
                 autopilot=mavutil.mavlink.MAV_AUTOPILOT_INVALID,
                 base_mode=0,
@@ -88,23 +94,204 @@ class OnboardController:
                 system_status=mavutil.mavlink.MAV_STATE_UNINIT,
                 mavlink_version=3,
             )
-            time.sleep(1)
+            time.sleep(1.0)
 
     def run(self):
         self.connect_to_mavlink()
 
+        # Connect to video stream
+        video_stream = VideoStream(self._rtsp_url)
+
+        # TODO: add retry limit and timeout
+        print("Waiting for video stream")
+        while not video_stream.frame_available():
+            print(".", end="")
+            time.sleep(0.1)
+        print("\nVideo stream available")
+
         # Create controllers
-        self.camera_controller = CameraTrackController(self.connection)
-        self.gimbal_controller = GimbalController(self.connection)
+        camera_controller = CameraTrackController(self._connection)
+        gimbal_controller = GimbalController(self._connection)
+
+        # Create tracker
+        tracker = TrackerCSTR()
 
         # Start the heartbeat thread
         heartbeat_thread = threading.Thread(target=self.send_heartbeat)
         heartbeat_thread.daemon = True
         heartbeat_thread.start()
 
+        # Tracking state
+        tracking_changed = True
+        tracking_rect = None
+        tracking_rect_new = None
+
+        # TODO: ensure consistency of frame updates with GCS.
+        fps = 50
+        update_period = 1.0 / fps
         while True:
+            start_time = time.time()
+
+            if video_stream.frame_available():
+                frame = copy.deepcopy(video_stream.frame())
+
+                if camera_controller.track_type() is CameraTrackType.NONE:
+                    if tracking_rect is not None:
+                        tracking_rect = None
+                        gimbal_controller.reset()
+
+                elif camera_controller.track_type() is CameraTrackType.RECTANGLE:
+                    if tracking_rect is None:
+                        tracking_rect = camera_controller.track_rectangle()
+                        nroi = [
+                            tracking_rect.top_left_x,
+                            tracking_rect.top_left_y,
+                            tracking_rect.bot_right_x - tracking_rect.top_left_x,
+                            tracking_rect.bot_right_y - tracking_rect.top_left_y,
+                        ]
+                        tracker.set_normalised_roi(nroi)
+
+                # update tracker and gimbal if tracking active
+                if tracking_rect is not None:
+                    success, box = tracker.update(frame)
+                    if success:
+                        (x, y, w, h) = [int(v) for v in box]
+                        u = x + w // 2
+                        v = y + h // 2
+                        gimbal_controller.update_center(u, v, frame.shape)
+                    else:
+                        print("Tracking failure detected.")
+                        # TODO: implement tracker reset
+                        # self.ResetTracker()
+                        tracking_rect = None
+                        gimbal_controller.reset()
+
             # Rate limit
-            time.sleep(0.01)
+            elapsed_time = time.time() - start_time
+            sleep_time = max(0.0, update_period - elapsed_time)
+            time.sleep(sleep_time)
+
+
+class VideoStream:
+    """
+    BlueRov video capture class. Adapted to capture a RTSP stream.
+
+    Attributes:
+        rtsp_url (string): RTSP URL
+        video_decode (string): Transform YUV (12bits) to BGR (24bits)
+        video_pipe (object): GStreamer top-level pipeline
+        video_sink (object): Gstreamer sink element
+        video_sink_conf (string): Sink configuration
+        video_source (string): Udp source ip and port
+        latest_frame (np.ndarray): Latest retrieved video frame
+    """
+
+    def __init__(self, rtsp_url, latency=50):
+        Gst.init(None)
+
+        self.rtsp_url = rtsp_url
+        self.latency = latency
+
+        self.latest_frame = self._new_frame = None
+
+        self.video_source = f"rtspsrc location={rtsp_url} latency={latency}"
+
+        # Python does not have nibble, convert YUV nibbles (4-4-4) to OpenCV standard BGR bytes (8-8-8)
+        self.video_decode = (
+            "! decodebin ! videoconvert ! video/x-raw,format=(string)BGR ! videoconvert"
+        )
+        # Create a sink to get data
+        self.video_sink_conf = (
+            "! appsink emit-signals=true sync=false max-buffers=2 drop=true"
+        )
+
+        self.video_pipe = None
+        self.video_sink = None
+
+        self.run()
+
+    def start_gst(self, config=None):
+        """ Start gstreamer pipeline and sink
+        Pipeline description list e.g:
+            [
+                'videotestsrc ! decodebin', \
+                '! videoconvert ! video/x-raw,format=(string)BGR ! videoconvert',
+                '! appsink'
+            ]
+
+        Args:
+            config (list, optional): Gstreamer pileline description list
+        """
+
+        if not config:
+            config = [
+                "videotestsrc ! decodebin",
+                "! videoconvert ! video/x-raw,format=(string)BGR ! videoconvert",
+                "! appsink",
+            ]
+
+        command = " ".join(config)
+        self.video_pipe = Gst.parse_launch(command)
+        self.video_pipe.set_state(Gst.State.PLAYING)
+        self.video_sink = self.video_pipe.get_by_name("appsink0")
+
+    @staticmethod
+    def gst_to_opencv(sample):
+        """Transform byte array into np array
+
+        Args:
+            sample (TYPE): Description
+
+        Returns:
+            TYPE: Description
+        """
+        buf = sample.get_buffer()
+        caps_structure = sample.get_caps().get_structure(0)
+        array = np.ndarray(
+            (caps_structure.get_value("height"), caps_structure.get_value("width"), 3),
+            buffer=buf.extract_dup(0, buf.get_size()),
+            dtype=np.uint8,
+        )
+        return array
+
+    def frame(self):
+        """Get Frame
+
+        Returns:
+            np.ndarray: latest retrieved image frame
+        """
+        if self.frame_available:
+            self.latest_frame = self._new_frame
+            # reset to indicate latest frame has been 'consumed'
+            self._new_frame = None
+        return self.latest_frame
+
+    def frame_available(self):
+        """Check if a new frame is available
+
+        Returns:
+            bool: true if a new frame is available
+        """
+        return self._new_frame is not None
+
+    def run(self):
+        """Get frame to update _new_frame"""
+
+        self.start_gst(
+            [
+                self.video_source,
+                self.video_decode,
+                self.video_sink_conf,
+            ]
+        )
+
+        self.video_sink.connect("new-sample", self.callback)
+
+    def callback(self, sink):
+        sample = sink.emit("pull-sample")
+        self._new_frame = self.gst_to_opencv(sample)
+
+        return Gst.FlowReturn.OK
 
 
 class CameraTrackType(Enum):
@@ -122,9 +309,9 @@ class CameraTrackPoint:
     Camera track point (normalised)
     """
 
-    def __init__(self, x, y, radius):
-        self.x = x
-        self.y = y
+    def __init__(self, point_x, point_y, radius):
+        self.point_x = point_x
+        self.point_y = point_y
         self.radius = radius
 
 
@@ -133,11 +320,11 @@ class CameraTrackRectangle:
     Camera track rectangle (normalised)
     """
 
-    def __init__(self, x, y, w, h):
-        self.x = x
-        self.y = y
-        self.w = w
-        self.h = h
+    def __init__(self, top_left_x, top_left_y, bot_right_x, bot_right_y):
+        self.top_left_x = top_left_x
+        self.top_left_y = top_left_y
+        self.bot_right_x = bot_right_x
+        self.bot_right_y = bot_right_y
 
 
 class CameraTrackController:
@@ -180,17 +367,17 @@ class CameraTrackController:
 
     def track_type(self):
         with self._lock:
-            track_type = copy.deep_copy(self._track_type)
+            track_type = copy.deepcopy(self._track_type)
         return track_type
 
     def track_point(self):
         with self._lock:
-            track_point = copy.deep_copy(self._track_point)
+            track_point = copy.deepcopy(self._track_point)
         return track_point
 
     def track_rectangle(self):
         with self._lock:
-            track_rect = copy.deep_copy(self._track_rect)
+            track_rect = copy.deepcopy(self._track_rect)
         return track_rect
 
     def _send_camera_information(self):
@@ -243,27 +430,30 @@ class CameraTrackController:
     def _handle_camera_track_point(self, msg):
         print("Got COMMAND_LONG: CAMERA_TRACK_POINT")
         # These are already floats
-        norm_x = msg.param1
-        norm_y = msg.param2
+        point_x = msg.param1
+        point_y = msg.param2
         radius = msg.param3
-        print(f"Track point: x: {norm_x}, y: {norm_y}, radius: {radius}")
+        print(f"Track point: x: {point_x}, y: {point_y}, radius: {radius}")
         with self._lock:
             self._track_type = CameraTrackType.POINT
-            self._track_point = CameraTrackPoint(norm_x, norm_y, radius)
+            self._track_point = CameraTrackPoint(point_x, point_y, radius)
 
     def _handle_camera_track_rectangle(self, msg):
         print("Got COMMAND_LONG: CAMERA_TRACK_RECTANGLE")
         # These should remain as floats (normalized coordinates)
-        norm_x = msg.param1
-        norm_y = msg.param2
-        norm_w = msg.param3
-        norm_h = msg.param4
+        top_left_x = msg.param1
+        top_left_y = msg.param2
+        bot_right_x = msg.param3
+        bot_right_y = msg.param4
         print(
-            f"Track rectangle: x: {norm_x}, y: {norm_y}, " f"w: {norm_w}, h: {norm_h}"
+            f"Track rectangle: x1: {top_left_x}, y1: {top_left_y}, "
+            f"x2: {bot_right_x}, y2: {bot_right_y}"
         )
         with self._lock:
             self._track_type = CameraTrackType.RECTANGLE
-            self._track_rect = CameraTrackRectangle(norm_x, norm_y, norm_w, norm_h)
+            self._track_rect = CameraTrackRectangle(
+                top_left_x, top_left_y, bot_right_x, bot_right_y
+            )
 
     def _handle_camera_stop_tracking(self, msg):
         print("Got COMMAND_LONG: CAMERA_STOP_TRACKING")
@@ -344,7 +534,7 @@ class GimbalController:
             self._center_x = x
             self._center_y = y
             self._height, self._width, _ = shape
-            print(f"width: {self._width}, height: {self._height}, center: [{x}, {y}]")
+            # print(f"width: {self._width}, height: {self._height}, center: [{x}, {y}]")
 
     def reset(self):
         with self._lock:
@@ -456,11 +646,52 @@ class PI_controller:
         self.I = 0
 
 
+class TrackerCSTR:
+    """
+    Wrapper for cv2.legacy.TrackerCSRT
+    """
+
+    def __init__(self):
+        self._tracker = cv2.legacy.TrackerCSRT_create()
+        self._nroi = None
+        self._nroi_changed = False
+
+    def update(self, frame):
+        if self._nroi is None or frame is None:
+            return False, None
+
+        if self._nroi_changed:
+            self._tracker = cv2.legacy.TrackerCSRT_create()
+            # denomalise the roi
+            height, width, _ = frame.shape
+            roi = [
+                int(self._nroi[0] * width),
+                int(self._nroi[1] * height),
+                int(self._nroi[2] * width),
+                int(self._nroi[3] * height),
+            ]
+            print(f"TrackerCSTRL: ROI: {roi}")
+            self._tracker.init(frame, roi)
+            self._nroi_changed = False
+
+        return self._tracker.update(frame)
+
+    def set_normalised_roi(self, nroi):
+        """
+        Set the region of interest
+
+        [top_left_x, top_left_y, width, height]
+        """
+        self._nroi = nroi
+        self._nroi_changed = True
+
+
 if __name__ == "__main__":
-    ip = "127.0.0.1"
-    port = 14550
+    mavlink_ip = "127.0.0.1"
+    mavlink_port = 14550
     sysid = 1  # same as vehicle
     compid = type = mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER
+    rtsp_url = "rtsp://127.0.0.1:8554/camera"
 
-    controller = OnboardController(ip, port, sysid, compid)
+    controller = OnboardController(mavlink_ip, mavlink_port, sysid, compid, rtsp_url)
     controller.run()
