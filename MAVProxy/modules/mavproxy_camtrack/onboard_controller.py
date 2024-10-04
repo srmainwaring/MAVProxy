@@ -374,7 +374,7 @@ class GimbalController:
             start_time = time.time()
 
             # Copy shared variables
-            with self.lock:
+            with self._lock:
                 centre_x = int(self._center_x)
                 centre_y = int(self._center_y)
                 width = self._width
