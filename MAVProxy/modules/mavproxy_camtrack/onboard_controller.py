@@ -242,10 +242,10 @@ class OnboardController:
                         self._gimbal_controller.reset()
 
                 # TODO: profiling stats
-                if frame_count % 10 == 0:
-                    av_update_time = av_update_time / 10.0 * 1000
-                    print(f"gimbal controller update: {av_update_time:.0f} ms")
-                    av_update_time = 0.0
+                # if frame_count % 10 == 0:
+                #     av_update_time = av_update_time / 10.0 * 1000
+                #     print(f"gimbal controller update: {av_update_time:.0f} ms")
+                #     av_update_time = 0.0
 
             # Rate limit
             elapsed_time = time.time() - start_time
