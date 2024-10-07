@@ -212,7 +212,16 @@ class CamTrackModule(mp_module.MPModule):
 
         # GUI
         # TODO: provide args to set RTSP server location
+        # localhost simulation
         rtsp_url = "rtsp://127.0.0.1:8554/camera"
+
+        # home wifi
+        # rtsp_url = "rtsp://198.168.1.204:8554/fpv_stream"
+
+        # herelink wifi access point
+        # rtsp_url = "rtsp://192.168.43.1:8554/fpv_stream"
+        # SIYI A8 camera
+        # rtsp_url = rtsp://192.168.144.25:8554/main.264
         self.camera_view = CameraView(self.mpstate, "Camera Tracking", rtsp_url)
 
         # mavlink messages
