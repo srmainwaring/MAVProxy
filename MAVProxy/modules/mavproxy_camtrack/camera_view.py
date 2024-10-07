@@ -260,14 +260,47 @@ if __name__ == "__main__":
     from optparse import OptionParser
 
     parser = OptionParser("camera_view.py [options]")
-    parser.add_option("--rtsp-server", default=None, type=str, help="RTSP URL")
+    parser.add_option("--master", default=None, type=str, help="MAVLink device")
+    parser.add_option("--rtsp-server", default=None, type=str, help="RTSP server URL")
+    parser.add_option("--sysid", default=255, type=int, help="Source system ID")
+    parser.add_option("--cmpid", default=1, type=int, help="Source component ID")
 
     (opts, args) = parser.parse_args()
+    if opts.master is None:
+        print("Must specify a MAVLink device")
+        sys.exit(1)
     if opts.rtsp_server is None:
-        print("Must specify an RTSP URL")
+        print("Must specify an RTSP server URL")
         sys.exit(1)
 
-    camera_view = CameraView("Camera View", opts.rtsp_server)
+    class MockMPState:
+        def __init__(self, device, sysid, compid):
+            self._device = device
+            self._sysid = sysid
+            self._cmpid = compid
+
+            self._connection = mavutil.mavlink_connection(
+                self._device,
+                source_system=self._sysid,
+                source_component=self._cmpid,
+            )
+            print("Searching for vehicle")
+            while not self._connection.probably_vehicle_heartbeat(
+                self._connection.wait_heartbeat()
+            ):
+                print(".", end="")
+            print("\nFound vehicle")
+            print(
+                "Heartbeat received (system: {} component: {})".format(
+                    self._connection.target_system, self._connection.target_component
+                )
+            )
+
+        def master(self):
+            return self._connection
+
+    mpstate = MockMPState(opts.master, opts.sysid, opts.cmpid)
+    camera_view = CameraView(mpstate, "Camera View", opts.rtsp_server)
 
     while True:
         time.sleep(0.1)
