@@ -317,7 +317,7 @@ class CamTrackModule(mp_module.MPModule):
             print(msg)
 
         # check command_ack
-        elif mtype == "COMMAND_ACK":
+        elif False: #mtype == "COMMAND_ACK":
             if msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
                 if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
                     print("Got COMMAND_ACK: CAMERA_TRACK_POINT: ACCEPTED")
@@ -370,7 +370,7 @@ class CamTrackModule(mp_module.MPModule):
             # msg.target_component
 
         # check command_long
-        elif mtype == "COMMAND_LONG":
+        elif False: #mtype == "COMMAND_LONG":
             # TODO: check target_system is for offboard control
             if msg.target_system != self.master.source_system:
                 pass
