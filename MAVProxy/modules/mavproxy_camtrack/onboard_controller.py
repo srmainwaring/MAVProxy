@@ -7,11 +7,15 @@ import cv2
 import gi
 import math
 import numpy as np
+import queue
 import threading
 import time
 
 from enum import Enum
 from pymavlink import mavutil
+
+from transforms3d import euler
+from transforms3d import quaternions
 
 from MAVProxy.modules.lib import mp_util
 
@@ -53,7 +57,14 @@ class OnboardController:
         self._sysid = sysid
         self._compid = compid
         self._rtsp_url = rtsp_url
+
+        # mavlink connection
         self._connection = None
+
+        # list of controllers to forward mavlink message to
+        self._controllers = []
+        self._camera_controller = None
+        self._gimbal_controller = None
 
         print(
             "Onboard Controller (sysid: {}, compid: {})".format(
@@ -61,7 +72,10 @@ class OnboardController:
             )
         )
 
-    def connect_to_mavlink(self):
+    def _connect_to_mavlink(self):
+        """
+        Establish a mavlink connection.
+        """
         self._connection = mavutil.mavlink_connection(
             f"udp:{self._mavlink_ip}:{self._mavlink_port}",
             source_system=self._sysid,
@@ -72,18 +86,16 @@ class OnboardController:
             self._connection.wait_heartbeat()
         ):
             print(".", end="")
-
-        print("Found vehicle")
-        self._connection.wait_heartbeat()
+        print("\nFound vehicle")
         print(
             "Heartbeat received (system: {} component: {})".format(
                 self._connection.target_system, self._connection.target_component
             )
         )
 
-    def send_heartbeat(self):
+    def _send_heartbeat_task(self):
         """
-        Send heartbeat identifying this as an onboard controller.
+        Task to send a heartbeat identifying this as an onboard controller.
         """
         while True:
             self._connection.mav.heartbeat_send(
@@ -96,8 +108,47 @@ class OnboardController:
             )
             time.sleep(1.0)
 
+    def _mavlink_recv_task(self):
+        """
+        Task to receive a mavlink message and forwward to controllers.
+        """
+        update_rate = 1000.0
+        update_period = 1.0 / update_rate
+
+        while True:
+
+            def __process_message():
+                msg = self._connection.recv_match(blocking=True)
+                # Apply filters
+                if (
+                    msg is None
+                    or msg.get_type() == "BAD_DATA"
+                    # or not hasattr(msg, "target_system")
+                    # or not hasattr(msg, "target_component")
+                    # or msg.target_system != sysid
+                    # or msg.target_component != compid
+                ):
+                    return
+
+                for controller in self._controllers:
+                    if not hasattr(controller, "mavlink_packet"):
+                        return
+                    controller.mavlink_packet(msg)
+
+            start_time = time.time()
+            __process_message()
+            elapsed_time = time.time() - start_time
+            sleep_time = max(0.0, update_period - elapsed_time)
+            time.sleep(sleep_time)
+
     def run(self):
-        self.connect_to_mavlink()
+        """
+        Run the onboard controller.
+
+        Connects to mavlink and a video stream then monitors camera track
+        requests and updates a tracker and gimbal control as required.
+        """
+        self._connect_to_mavlink()
 
         # Connect to video stream
         video_stream = VideoStream(self._rtsp_url)
@@ -109,40 +160,66 @@ class OnboardController:
             time.sleep(0.1)
         print("\nVideo stream available")
 
-        # Create controllers
-        camera_controller = CameraTrackController(self._connection)
-        gimbal_controller = GimbalController(self._connection)
-
-        # Create tracker
-        tracker = TrackerCSTR()
+        # Create and register controllers
+        self._camera_controller = CameraTrackController(self._connection)
+        self._gimbal_controller = GimbalController(self._connection)
+        self._controllers.append(self._camera_controller)
+        self._controllers.append(self._gimbal_controller)
 
         # Start the heartbeat thread
-        heartbeat_thread = threading.Thread(target=self.send_heartbeat)
+        heartbeat_thread = threading.Thread(target=self._send_heartbeat_task)
         heartbeat_thread.daemon = True
         heartbeat_thread.start()
 
-        # Tracking state
-        tracking_changed = True
+        # Start the mavlink_recv thread
+        mavlink_recv_thread = threading.Thread(target=self._mavlink_recv_task)
+        mavlink_recv_thread.daemon = True
+        mavlink_recv_thread.start()
+
+        # Create tracker
+        tracker = TrackerCSTR()
         tracking_rect = None
-        tracking_rect_new = None
+        tracking_rect_changed = True
 
         # TODO: ensure consistency of frame updates with GCS.
         fps = 50
-        update_period = 1.0 / fps
+        update_rate = fps
+        update_period = 1.0 / update_rate
+        frame_count = 0
+        av_update_time = 0.0
         while True:
             start_time = time.time()
 
             if video_stream.frame_available():
+                frame_count += 1
                 frame = copy.deepcopy(video_stream.frame())
 
-                if camera_controller.track_type() is CameraTrackType.NONE:
+                track_type = self._camera_controller.track_type()
+                if track_type is CameraTrackType.NONE:
                     if tracking_rect is not None:
                         tracking_rect = None
-                        gimbal_controller.reset()
+                        self._gimbal_controller.reset()
 
-                elif camera_controller.track_type() is CameraTrackType.RECTANGLE:
-                    if tracking_rect is None:
-                        tracking_rect = camera_controller.track_rectangle()
+                elif track_type is CameraTrackType.RECTANGLE:
+                    # TODO: not handling when the tracking rectange changes
+                    if tracking_rect is not None:
+
+                        def __compare_rect(rect1, rect2):
+                            return (
+                                math.isclose(rect1.top_left_x, rect2.top_left_x)
+                                and math.isclose(rect1.top_left_y, rect2.top_left_y)
+                                and math.isclose(rect1.bot_right_x, rect2.bot_right_x)
+                                and math.isclose(rect1.bot_right_y, rect2.bot_right_y)
+                            )
+
+                        if not __compare_rect(
+                            tracking_rect, self._camera_controller.track_rectangle()
+                        ):
+                            tracking_rect_changed = True
+
+                    if tracking_rect is None or tracking_rect_changed:
+                        tracking_rect_changed = False
+                        tracking_rect = self._camera_controller.track_rectangle()
                         nroi = [
                             tracking_rect.top_left_x,
                             tracking_rect.top_left_y,
@@ -158,18 +235,23 @@ class OnboardController:
                         (x, y, w, h) = [int(v) for v in box]
                         u = x + w // 2
                         v = y + h // 2
-                        gimbal_controller.update_center(u, v, frame.shape)
+                        self._gimbal_controller.update_center(u, v, frame.shape)
                     else:
                         print("Tracking failure detected.")
-                        # TODO: implement tracker reset
-                        # self.ResetTracker()
                         tracking_rect = None
-                        gimbal_controller.reset()
+                        self._gimbal_controller.reset()
+
+                # TODO: profiling stats
+                if frame_count % 10 == 0:
+                    av_update_time = av_update_time / 10.0 * 1000
+                    print(f"gimbal controller update: {av_update_time:.0f} ms")
+                    av_update_time = 0.0
 
             # Rate limit
             elapsed_time = time.time() - start_time
             sleep_time = max(0.0, update_period - elapsed_time)
             time.sleep(sleep_time)
+            av_update_time += elapsed_time
 
 
 class VideoStream:
@@ -307,6 +389,8 @@ class CameraTrackType(Enum):
 class CameraTrackPoint:
     """
     Camera track point (normalised)
+
+    https://mavlink.io/en/messages/common.html#MAV_CMD_CAMERA_TRACK_POINT
     """
 
     def __init__(self, point_x, point_y, radius):
@@ -318,6 +402,8 @@ class CameraTrackPoint:
 class CameraTrackRectangle:
     """
     Camera track rectangle (normalised)
+
+    https://mavlink.io/en/messages/common.html#MAV_CMD_CAMERA_TRACK_RECTANGLE
     """
 
     def __init__(self, top_left_x, top_left_y, bot_right_x, bot_right_y):
@@ -333,7 +419,6 @@ class CameraTrackController:
     """
 
     def __init__(self, connection):
-        # TODO: check thread safety of connection
         self._connection = connection
         self._sysid = self._connection.source_system
         self._compid = self._connection.source_component
@@ -344,6 +429,7 @@ class CameraTrackController:
             )
         )
 
+        # TODO: this should be supplied by a camera when using hardware
         # camera information
         self._vendor_name = "SIYI"
         self._model_name = "A8"
@@ -361,24 +447,41 @@ class CameraTrackController:
         self._track_rect = None
 
         # Start the tracker thread
-        self._tracker_thread = threading.Thread(target=self._tracker_task)
-        self._tracker_thread.daemon = True
-        self._tracker_thread.start()
+        self._mavlink_in_queue = queue.Queue()
+        self._mavlink_out_queue = queue.Queue()
+        self._mavlink_thread = threading.Thread(target=self._mavlink_task)
+        self._mavlink_thread.daemon = True
+        self._mavlink_thread.start()
 
     def track_type(self):
+        """
+        Return the current track type.
+        """
         with self._lock:
             track_type = copy.deepcopy(self._track_type)
         return track_type
 
     def track_point(self):
+        """
+        Return a point to track if the track type is POINT, else None.
+        """
         with self._lock:
             track_point = copy.deepcopy(self._track_point)
         return track_point
 
     def track_rectangle(self):
+        """
+        Return a rectangle to track if the track type is RECTANGLE, else None.
+        """
         with self._lock:
             track_rect = copy.deepcopy(self._track_rect)
         return track_rect
+
+    def mavlink_packet(self, msg):
+        """
+        Process a mavlink packet.
+        """
+        self._mavlink_in_queue.put(msg)
 
     def _send_camera_information(self):
         """
@@ -429,7 +532,7 @@ class CameraTrackController:
 
     def _handle_camera_track_point(self, msg):
         print("Got COMMAND_LONG: CAMERA_TRACK_POINT")
-        # These are already floats
+        # Parameters are a normalised point.
         point_x = msg.param1
         point_y = msg.param2
         radius = msg.param3
@@ -440,7 +543,7 @@ class CameraTrackController:
 
     def _handle_camera_track_rectangle(self, msg):
         print("Got COMMAND_LONG: CAMERA_TRACK_RECTANGLE")
-        # These should remain as floats (normalized coordinates)
+        # Parameters are a normalised rectangle.
         top_left_x = msg.param1
         top_left_y = msg.param2
         bot_right_x = msg.param3
@@ -462,31 +565,45 @@ class CameraTrackController:
             self._track_point = None
             self._track_rect = None
 
-    def _tracker_task(self):
+    def _mavlink_task(self):
+        """
+        Process mavlink messages relevant to camera tracking.
+        """
         self._send_camera_information()
 
+        with self._lock:
+            sysid = self._sysid
+            compid = self._compid
+
+        update_rate = 1000.0
+        update_period = 1.0 / update_rate
+
         while True:
-            with self._lock:
-                sysid = self._sysid
-                compid = self._compid
 
-            # TODO: check thread safety of connection
-            msg = self._connection.recv_match(type="COMMAND_LONG", blocking=True)
-            mtype = msg.get_type()
-            if msg and mtype == "COMMAND_LONG":
-                if msg.target_system != sysid:
-                    continue
-                elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
-                    self._handle_camera_track_point(msg)
-                elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_RECTANGLE:
-                    self._handle_camera_track_rectangle(msg)
-                elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_STOP_TRACKING:
-                    self._handle_camera_stop_tracking(msg)
-                else:
-                    print(msg.command)
+            def __process_message():
+                if self._mavlink_in_queue.empty():
+                    return
 
-            # Rate limit
-            time.sleep(0.01)
+                msg = self._mavlink_in_queue.get()
+                mtype = msg.get_type()
+
+                if msg and mtype == "COMMAND_LONG":
+                    if msg.target_system != sysid:
+                        return
+                    elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
+                        self._handle_camera_track_point(msg)
+                    elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_RECTANGLE:
+                        self._handle_camera_track_rectangle(msg)
+                    elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_STOP_TRACKING:
+                        self._handle_camera_stop_tracking(msg)
+                    else:
+                        pass
+
+            start_time = time.time()
+            __process_message()
+            elapsed_time = time.time() - start_time
+            sleep_time = max(0.0, update_period - elapsed_time)
+            time.sleep(sleep_time)
 
 
 class GimbalController:
@@ -495,7 +612,6 @@ class GimbalController:
     """
 
     def __init__(self, connection):
-        # TODO: check thread safety of connection
         self._connection = connection
         self._sysid = self._connection.source_system
         self._compid = self._connection.source_component
@@ -507,25 +623,43 @@ class GimbalController:
         )
 
         # Shared variables
-        self._lock = threading.Lock()
+        self._control_lock = threading.Lock()
         self._center_x = 0
         self._center_y = 0
         self._width = None
         self._height = None
         self._tracking = False
 
+        # gimbal state
+        # TODO: obtain the mount neutral angles from params
+        # NOTE: q = [w, x, y, z]
+        self._mavlink_lock = threading.Lock()
+        self._neutral_x = 0.0
+        self._neutral_y = 0.0
+        self._neutral_z = 0.0
+        self._gimbal_device_flags = None
+        self._gimbal_orientation = None
+        self._gimbal_failure_flags = None
+
         # TODO: add options for PI controller gains
         # PI controllers: SIYI A8: 0.1, Gazebo: 0.3
         self._pitch_controller = PI_controller(Pgain=0.5, Igain=0.01, IMAX=1.0)
         self._yaw_controller = PI_controller(Pgain=0.5, Igain=0.01, IMAX=1.0)
 
+        # Start the control thread
+        self._control_in_queue = queue.Queue()
+        self._control_out_queue = queue.Queue()
+        self._control_thread = threading.Thread(target=self._control_task)
+        self._control_thread.daemon = True
+        self._control_thread.start()
+
         # Start the move gimbal thread
-        self._gimbal_thread = threading.Thread(target=self._move_gimbal_task)
-        self._gimbal_thread.daemon = True
-        self._gimbal_thread.start()
+        self._mavlink_thread = threading.Thread(target=self._mavlink_task)
+        self._mavlink_thread.daemon = True
+        self._mavlink_thread.start()
 
     def update_center(self, x, y, shape):
-        with self._lock:
+        with self._control_lock:
             self._tracking = True
             self._center_x = x
             self._center_y = y
@@ -533,10 +667,15 @@ class GimbalController:
             # print(f"width: {self._width}, height: {self._height}, center: [{x}, {y}]")
 
     def reset(self):
-        with self._lock:
+        with self._control_lock:
             self._tracking = False
             self._center_x = 0.0
             self._center_y = 0.0
+            self._pitch_controller.reset_I()
+            self._yaw_controller.reset_I()
+
+    def mavlink_packet(self, msg):
+        self._control_in_queue.put(msg)
 
     def _send_gimbal_manager_pitch_yaw_angles(self, pitch, yaw, pitch_rate, yaw_rate):
         """
@@ -554,39 +693,70 @@ class GimbalController:
         )
         self._connection.mav.send(msg)
 
-    def _move_gimbal_task(self):
+    def _control_task(self):
+        """
+        Gimbal control task.
+
+        When tracking, move the camera to centre on the bounding box
+        around the tracked object.
+
+        When not tracking, return the gimbal to its neutral position.
+        """
         while True:
             # Record the start time of the loop
             start_time = time.time()
 
             # Copy shared variables
-            with self._lock:
-                centre_x = int(self._center_x)
-                centre_y = int(self._center_y)
-                width = self._width
-                height = self._height
+            with self._control_lock:
+                act_x = self._center_x
+                act_y = self._center_y
+                frame_width = self._width
+                frame_height = self._height
                 tracking = self._tracking
 
-            # Centre gimbal when not tracking
-            if not tracking:
-                self._send_gimbal_manager_pitch_yaw_angles(
-                    0.0, 0.0, float("nan"), float("nan")
-                )
-            else:
-                if centre_x == 0.0 and centre_y == 0.0:
-                    diff_x = 0.0
-                    diff_y = 0.0
-                else:
-                    diff_x = (centre_x - (width / 2)) / 2
-                    diff_y = -(centre_y - (height / 2)) / 2
+            # Return gimbal to its neutral orientation when not tracking
+            with self._mavlink_lock:
+                gimbal_orientation = self._gimbal_orientation
 
-                print(f"diff_x: {diff_x}, diff_y: {diff_y}")
+            if not tracking and gimbal_orientation is not None:
+                # NOTE: to centre the gimbal when not tracking, we need to know
+                # the neutral angles from the MNT1_NEUTRAL_x params, and also
+                # the current mount orientation.
+                _, ay, az = euler.quat2euler(gimbal_orientation)
 
-                err_pitch = math.radians(diff_y)
+                err_pitch = self._neutral_y - ay
                 pitch_rate_rads = self._pitch_controller.run(err_pitch)
 
-                err_yaw = math.radians(diff_x)
+                err_yaw = self._neutral_z - az
                 yaw_rate_rads = self._yaw_controller.run(err_yaw)
+
+                self._send_gimbal_manager_pitch_yaw_angles(
+                    float("nan"),
+                    float("nan"),
+                    pitch_rate_rads,
+                    yaw_rate_rads,
+                )
+            elif frame_width is not None and frame_height is not None:
+                tgt_x = 0.5 * frame_width
+                tgt_y = 0.5 * frame_height
+
+                if math.isclose(act_x, 0.0) and math.isclose(act_y, 0.0):
+                    err_x = 0.0
+                    err_y = 0.0
+                else:
+                    err_x = act_x - tgt_x
+                    err_y = -(act_y - tgt_y)
+
+                err_pitch = math.radians(err_y)
+                pitch_rate_rads = self._pitch_controller.run(err_pitch)
+
+                err_yaw = math.radians(err_x)
+                yaw_rate_rads = self._yaw_controller.run(err_yaw)
+
+                # print(
+                #     f"err_x: {err_x}, err_y: {err_y}, "
+                #     f"pitch_rate: {pitch_rate_rads}, yaw_rate: {yaw_rate_rads}"
+                # )
 
                 self._send_gimbal_manager_pitch_yaw_angles(
                     float("nan"),
@@ -597,6 +767,32 @@ class GimbalController:
 
             # Update at 50Hz
             update_period = 0.02
+            elapsed_time = time.time() - start_time
+            sleep_time = max(0.0, update_period - elapsed_time)
+            time.sleep(sleep_time)
+
+    def _mavlink_task(self):
+
+        update_rate = 1000.0
+        update_period = 1.0 / update_rate
+
+        while True:
+
+            def __process_message():
+                if self._control_in_queue.empty():
+                    return
+                msg = self._control_in_queue.get()
+                mtype = msg.get_type()
+                # NOTE: GIMBAL_DEVICE_ATTITUDE_STATUS is broadcast
+                #       (sysid=0, compid=0)
+                if msg and mtype == "GIMBAL_DEVICE_ATTITUDE_STATUS":
+                    with self._mavlink_lock:
+                        self._gimbal_device_flags = msg.flags
+                        self._gimbal_orientation = msg.q
+                        self._gimbal_failure_flags = msg.failure_flags
+
+            start_time = time.time()
+            __process_message()
             elapsed_time = time.time() - start_time
             sleep_time = max(0.0, update_period - elapsed_time)
             time.sleep(sleep_time)
@@ -663,12 +859,14 @@ class TrackerCSTR:
             # denormalise the roi
             height, width, _ = frame.shape
             roi = [
-                int(self._nroi[0] * width), # x
-                int(self._nroi[1] * height), # y
-                int(self._nroi[2] * width), # w
-                int(self._nroi[3] * height), # h
+                int(self._nroi[0] * width),  # x
+                int(self._nroi[1] * height),  # y
+                int(self._nroi[2] * width),  # w
+                int(self._nroi[3] * height),  # h
             ]
-            print(f"TrackerCSTR: ROI: {roi}")
+            print(
+                f"TrackerCSTR: nroi: {self._nroi}, roi: {roi}, frame_width: {width}, frame_height: {height}"
+            )
             self._tracker.init(frame, roi)
             self._nroi_changed = False
 
