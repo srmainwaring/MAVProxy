@@ -51,11 +51,11 @@ class CameraCapFlags(Enum):
 
 
 class OnboardController:
-    def __init__(self, mavlink_ip, mavlink_port, sysid, compid, rtsp_url):
+    def __init__(self, mavlink_ip, mavlink_port, sysid, cmpid, rtsp_url):
         self._mavlink_ip = mavlink_ip
         self._mavlink_port = mavlink_port
         self._sysid = sysid
-        self._compid = compid
+        self._cmpid = cmpid
         self._rtsp_url = rtsp_url
 
         # mavlink connection
@@ -66,11 +66,7 @@ class OnboardController:
         self._camera_controller = None
         self._gimbal_controller = None
 
-        print(
-            "Onboard Controller (sysid: {}, compid: {})".format(
-                self._sysid, self._compid
-            )
-        )
+        print(f"Onboard Controller: src_sys: {self._sysid}, src_cmp: {self._cmpid})")
 
     def _connect_to_mavlink(self):
         """
@@ -79,7 +75,7 @@ class OnboardController:
         self._connection = mavutil.mavlink_connection(
             f"udp:{self._mavlink_ip}:{self._mavlink_port}",
             source_system=self._sysid,
-            source_component=self._compid,
+            source_component=self._cmpid,
         )
         print("Searching for vehicle")
         while not self._connection.probably_vehicle_heartbeat(
@@ -126,7 +122,7 @@ class OnboardController:
                     # or not hasattr(msg, "target_system")
                     # or not hasattr(msg, "target_component")
                     # or msg.target_system != sysid
-                    # or msg.target_component != compid
+                    # or msg.target_component != cmpid
                 ):
                     return
 
@@ -421,12 +417,11 @@ class CameraTrackController:
     def __init__(self, connection):
         self._connection = connection
         self._sysid = self._connection.source_system
-        self._compid = self._connection.source_component
+        self._cmpid = self._connection.source_component
 
         print(
-            "Camera Track Controller (sysid: {}, compid: {})".format(
-                self._sysid, self._compid
-            )
+            f"Camera Track Controller: "
+            f"src_sys: {self._sysid}, src_cmp: {self._cmpid}"
         )
 
         # TODO: this should be supplied by a camera when using hardware
@@ -573,7 +568,7 @@ class CameraTrackController:
 
         with self._lock:
             sysid = self._sysid
-            compid = self._compid
+            cmpid = self._cmpid
 
         update_rate = 1000.0
         update_period = 1.0 / update_rate
@@ -614,13 +609,9 @@ class GimbalController:
     def __init__(self, connection):
         self._connection = connection
         self._sysid = self._connection.source_system
-        self._compid = self._connection.source_component
+        self._cmpid = self._connection.source_component
 
-        print(
-            "Gimbal Controller (sysid: {}, compid: {})".format(
-                self._sysid, self._compid
-            )
-        )
+        print(f"Gimbal Controller: src_sys: {self._sysid}, src_cmp: {self._cmpid})")
 
         # Shared variables
         self._control_lock = threading.Lock()
@@ -784,7 +775,7 @@ class GimbalController:
                 msg = self._control_in_queue.get()
                 mtype = msg.get_type()
                 # NOTE: GIMBAL_DEVICE_ATTITUDE_STATUS is broadcast
-                #       (sysid=0, compid=0)
+                #       (sysid=0, cmpid=0)
                 if msg and mtype == "GIMBAL_DEVICE_ATTITUDE_STATUS":
                     with self._mavlink_lock:
                         self._gimbal_device_flags = msg.flags
@@ -883,11 +874,28 @@ class TrackerCSTR:
 
 
 if __name__ == "__main__":
+    # localhost
     mavlink_ip = "127.0.0.1"
     mavlink_port = 14550
-    sysid = 1  # same as vehicle
-    compid = type = mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER
-    rtsp_url = "rtsp://127.0.0.1:8554/camera"
+    
+    # companion computer - NET virtual serial port 
+    # mavlink_ip = "192.168.144.171"
+    # mavlink_port = 15001
 
-    controller = OnboardController(mavlink_ip, mavlink_port, sysid, compid, rtsp_url)
+    sysid = 1  # 1 is same as vehicle
+    cmpid = type = mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER
+    
+    # localhost simulation
+    # rtsp_url = "rtsp://127.0.0.1:8554/camera"
+
+    # home wifi
+    rtsp_url = "rtsp://192.168.1.204:8554/fpv_stream"
+
+    # herelink wifi access point
+    # rtsp_url = "rtsp://192.168.43.1:8554/fpv_stream"
+
+    # SIYI A8 camera
+    # rtsp_url = "rtsp://192.168.144.25:8554/main.264"
+
+    controller = OnboardController(mavlink_ip, mavlink_port, sysid, cmpid, rtsp_url)
     controller.run()
