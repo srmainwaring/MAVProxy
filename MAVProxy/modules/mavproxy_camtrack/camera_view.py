@@ -26,9 +26,10 @@ class CameraView:
         self.mpstate = mpstate
         self.rtsp_url = rtsp_url
 
-        # TODO: retrieve frame shape from frame
-        self.frame_width = 640
-        self.frame_height = 480
+        # TODO: remove hardcoded display size
+        display_width = 640
+        display_height = 480
+
         self.frame_counter = -1
 
         # TODO: gimbal and camera system ids
@@ -46,8 +47,8 @@ class CameraView:
             title=title,
             mouse_events=True,
             mouse_movement_events=False,
-            width=self.frame_width,
-            height=self.frame_height,
+            width=display_width,
+            height=display_height,
             key_events=True,
             can_drag=False,
             can_zoom=False,
@@ -118,10 +119,12 @@ class CameraView:
                     self.im.start_tracker(event.X, event.Y, twidth, twidth)
 
                     # TODO: move / encapsulate
-                    top_left_x = event.X / self.frame_width
-                    top_left_y = event.Y / self.frame_height
-                    bot_right_x = (event.X + twidth) / self.frame_width
-                    bot_right_y = (event.Y + twidth) / self.frame_height
+                    print(f"xres: {xres}, yres: {yres}")
+                    print(f"event.X: {event.X}, event.Y: {event.X}, twidth: {twidth}")
+                    top_left_x = event.X / xres
+                    top_left_y = event.Y / yres
+                    bot_right_x = (event.X + twidth) / xres
+                    bot_right_y = (event.Y + twidth) / yres
                     self.send_camera_track_rectangle(
                         top_left_x, top_left_y, bot_right_x, bot_right_y
                     )
