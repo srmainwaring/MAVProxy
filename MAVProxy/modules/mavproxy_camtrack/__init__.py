@@ -216,21 +216,32 @@ class CamTrackModule(mp_module.MPModule):
         rtsp_url = "rtsp://127.0.0.1:8554/camera"
 
         # home wifi
-        rtsp_url = "rtsp://192.168.1.204:8554/fpv_stream"
+        # rtsp_url = "rtsp://192.168.1.204:8554/fpv_stream"
 
         # herelink wifi access point
         # rtsp_url = "rtsp://192.168.43.1:8554/fpv_stream"
 
         # SIYI A8 camera
         # rtsp_url = "rtsp://192.168.144.25:8554/main.264"
+
         self.camera_view = CameraView(self.mpstate, "Camera Tracking", rtsp_url)
 
+        # TODO: NOTE: unused
         # mavlink messages
         self._last_gimbal_device_information = None
         self._last_gimbal_manager_status = None
         self._last_gimbal_device_information = None
         self._last_gimbal_device_attitude_status = None
         self._last_autopilot_state_for_gimbal_device = None
+        self._last_camera_tracking_image_status = None
+
+        # Discovery
+        self._do_request_gimbal_manager_information = True
+        self._do_request_gimbal_manager_status = True
+        self._do_request_gimbal_device_information = True
+        self._do_request_autopilot_state_for_gimbal_device = True
+        self._do_request_camera_information = True
+        self._do_request_camera_tracking_image_status = True
 
         # data
 
@@ -239,10 +250,6 @@ class CamTrackModule(mp_module.MPModule):
         self._fps = 30.0
         self._last_send = 0.0
         self._send_delay = (1.0 / self._fps) * 0.9
-
-        # heartbeat / gimbal info request
-        self._heartbeat_last_send = 0.0
-        self._heartbeat_delay = 1.0
 
         # commands
         self.add_command("camtrack", self.cmd_camtrack, "camera tracking")
@@ -284,7 +291,6 @@ class CamTrackModule(mp_module.MPModule):
     def mavlink_packet(self, msg):
         """Handle mavlink packets."""
         mtype = msg.get_type()
-        # print(mtype)
 
         # heartbeat
         if mtype == "HEARTBEAT":
@@ -315,10 +321,12 @@ class CamTrackModule(mp_module.MPModule):
             self.handle_camera_information(msg)
 
         elif mtype == "CAMERA_TRACKING_IMAGE_STATUS":
+            # TODO: add handler
             print(msg)
 
+        # TODO: NOTE: disabled
         # check command_ack
-        elif False: #mtype == "COMMAND_ACK":
+        elif False:  # mtype == "COMMAND_ACK":
             if msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_POINT:
                 if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
                     print("Got COMMAND_ACK: CAMERA_TRACK_POINT: ACCEPTED")
@@ -331,7 +339,11 @@ class CamTrackModule(mp_module.MPModule):
                 elif msg.result == mavutil.mavlink.MAV_RESULT_FAILED:
                     print("Got COMMAND_ACK: CAMERA_TRACK_POINT: FAILED")
                 else:
-                    print("Got COMMAND_ACK: CAMERA_TRACK_POINT: result: {}".format(msg.result))
+                    print(
+                        "Got COMMAND_ACK: CAMERA_TRACK_POINT: result: {}".format(
+                            msg.result
+                        )
+                    )
 
             elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_TRACK_RECTANGLE:
                 if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
@@ -345,7 +357,11 @@ class CamTrackModule(mp_module.MPModule):
                 elif msg.result == mavutil.mavlink.MAV_RESULT_FAILED:
                     print("Got COMMAND_ACK: CAMERA_TRACK_RECTANGLE: FAILED")
                 else:
-                    print("Got COMMAND_ACK: CAMERA_TRACK_RECTANGLE: result: {}".format(msg.result))
+                    print(
+                        "Got COMMAND_ACK: CAMERA_TRACK_RECTANGLE: result: {}".format(
+                            msg.result
+                        )
+                    )
 
             elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_STOP_TRACKING:
                 if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
@@ -359,19 +375,18 @@ class CamTrackModule(mp_module.MPModule):
                 elif msg.result == mavutil.mavlink.MAV_RESULT_FAILED:
                     print("Got COMMAND_ACK: CAMERA_STOP_TRACKING: FAILED")
                 else:
-                    print("Got COMMAND_ACK: CAMERA_STOP_TRACKING: RESULT: {}".format(msg.result))
+                    print(
+                        "Got COMMAND_ACK: CAMERA_STOP_TRACKING: RESULT: {}".format(
+                            msg.result
+                        )
+                    )
 
             elif msg.command == mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL:
                 print("Got COMMAND_ACK: MAV_CMD_SET_MESSAGE_INTERVAL")
 
-            # msg.command
-            # msg.result
-            # msg.progress
-            # msg.target_system
-            # msg.target_component
-
+        # TODO: NOTE: disabled
         # check command_long
-        elif False: #mtype == "COMMAND_LONG":
+        elif False:  # mtype == "COMMAND_LONG":
             # TODO: check target_system is for offboard control
             if msg.target_system != self.master.source_system:
                 pass
@@ -381,7 +396,6 @@ class CamTrackModule(mp_module.MPModule):
                 print(msg)
             elif msg.command == mavutil.mavlink.MAV_CMD_CAMERA_STOP_TRACKING:
                 print(msg)
-
 
     def handle_heartbeat(self, msg):
         sysid = msg.get_srcSystem()
@@ -443,39 +457,47 @@ class CamTrackModule(mp_module.MPModule):
             # pipe data to GUI
             # TODO: check interface in view for pipe updates
             # self.camera_view.parent_pipe_send.send(self._msg_list)
-
             # reset counters etc
             self._msg_list = []
             self._last_send = time.time()
 
         # TODO: implement camera and gimbal discovery correctly
-        if False: #(time.time() - self._heartbeat_last_send) > self._heartbeat_delay:
-            # NOTE: response sent by GCS_MAVLINK::try_send_message
+        # Discovery - most of these requests are handled in the FC
+        #             by GCS_MAVLINK::try_send_message
+        if self._do_request_gimbal_manager_information:
             self.send_request_message(
                 mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_MANAGER_INFORMATION
             )
+            self._do_request_gimbal_manager_information = False
 
-            # TODO: mavlink docs suggest this should be broadcast rather than
-            #       requested?
-            # NOTE: response sent by GCS_MAVLINK::try_send_message
+        if self._do_request_gimbal_manager_status:
             self.send_request_message(
                 mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_MANAGER_STATUS
             )
+            self._do_request_gimbal_manager_status = False
 
-            # TODO: only AP_Mount_Gremsy implements handle_gimbal_device_information
+        # NOTE: only AP_Mount_Gremsy implements handle_gimbal_device_information
+        if self._do_request_gimbal_device_information:
             self.send_request_message(
                 mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION
             )
+            self._do_request_gimbal_device_information = False
 
-            # NOTE: response sent by GCS_MAVLINK::try_send_message
+        if self._do_request_autopilot_state_for_gimbal_device:
             self.send_request_message(
                 mavutil.mavlink.MAVLINK_MSG_ID_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE
             )
+            self._do_request_autopilot_state_for_gimbal_device = False
 
-            # NOTE: response sent by GCS_MAVLINK::try_send_message
+        if self._do_request_camera_information:
             self.send_request_message(mavutil.mavlink.MAVLINK_MSG_ID_CAMERA_INFORMATION)
+            self._do_request_camera_information = False
 
-            self._heartbeat_last_send = time.time()
+        if self._do_request_camera_tracking_image_status:
+            self.send_request_message(
+                mavutil.mavlink.MAVLINK_MSG_ID_CAMERA_TRACKING_IMAGE_STATUS
+            )
+            self._do_request_camera_tracking_image_status = False
 
     def send_gimbal_manager_configure(self):
         # Acquire and release control
