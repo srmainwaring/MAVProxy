@@ -1,5 +1,51 @@
 """
-Onboard controller for camera tracking
+An onboard controller for managing a tracking camera and gimbal.
+
+Usage
+-----
+
+1. Run controller on localhost using an RTSP stream from a Gazebo simulation. 
+
+  python ./onboard_controller.py
+      --master 127.0.0.1:14550
+      --rtsp-server rtsp://127.0.0.1:8554/camera
+
+2. Run controller on localhost using an RTSP stream from a Herelink
+connected to a home WiFi network. 
+
+  python ./onboard_controller.py
+      --master 127.0.0.1:14550
+      --rtsp-server rtsp://192.168.1.204:8554/fpv_stream
+
+3. Run controller on RPi4 companion computer using an RTSP stream from
+a SIYI A8 camea. 
+
+  python ./onboard_controller.py
+      --master 192.168.144.171:15001
+      --rtsp-server rtsp://192.168.144.25:8554/main.264
+
+Examples 
+--------  
+
+Example devices and RTSP servers used in testing.
+
+localhost
+device = "127.0.0.1:14550
+
+companion computer - NET virtual serial port
+device = "192.168.144.171:15001"
+
+localhost simulation
+rtsp_url = "rtsp://127.0.0.1:8554/camera"
+
+home wifi
+rtsp_url = "rtsp://192.168.1.204:8554/fpv_stream"
+
+herelink wifi access point
+rtsp_url = "rtsp://192.168.43.1:8554/fpv_stream"
+
+SIYI A8 camera
+rtsp_url = "rtsp://192.168.144.25:8554/main.264"
 """
 
 import copy
@@ -893,24 +939,6 @@ if __name__ == "__main__":
     if opts.rtsp_server is None:
         print("Must specify an RTSP server URL")
         sys.exit(1)
-
-    # localhost
-    # device = "127.0.0.1:14550
-
-    # companion computer - NET virtual serial port
-    # device = "192.168.144.171:15001"
-
-    # localhost simulation
-    # rtsp_url = "rtsp://127.0.0.1:8554/camera"
-
-    # home wifi
-    # rtsp_url = "rtsp://192.168.1.204:8554/fpv_stream"
-
-    # herelink wifi access point
-    # rtsp_url = "rtsp://192.168.43.1:8554/fpv_stream"
-
-    # SIYI A8 camera
-    # rtsp_url = "rtsp://192.168.144.25:8554/main.264"
 
     controller = OnboardController(
         opts.master, opts.sysid, opts.cmpid, opts.rtsp_server
