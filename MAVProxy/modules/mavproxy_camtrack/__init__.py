@@ -494,8 +494,10 @@ class CamTrackModule(mp_module.MPModule):
             self._do_request_camera_information = False
 
         if self._do_request_camera_tracking_image_status:
-            self.send_request_message(
-                mavutil.mavlink.MAVLINK_MSG_ID_CAMERA_TRACKING_IMAGE_STATUS
+            self.send_set_message_interval_message(
+                mavutil.mavlink.MAVLINK_MSG_ID_CAMERA_TRACKING_IMAGE_STATUS,
+                1000 * 1000,  # 1Hz
+                response_target=1,  # flight-stack default
             )
             self._do_request_camera_tracking_image_status = False
 
@@ -523,17 +525,34 @@ class CamTrackModule(mp_module.MPModule):
     # MAVProxy.modules.mavproxy_misc.py
     def send_request_message(self, message_id, p1=0):
         self.master.mav.command_long_send(
-            self.settings.target_system,
-            self.settings.target_component,
-            mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,
+            self.settings.target_system,  # target_system
+            self.settings.target_component,  # target_component
+            mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE,  # command
             0,  # confirmation
-            message_id,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
+            message_id,  # param1
+            0,  # param2
+            0,  # param3
+            0,  # param4
+            0,  # param5
+            0,  # param6
+            0,  # param7
+        )
+
+    def send_set_message_interval_message(
+        self, message_id, interval_us, response_target=1
+    ):
+        self.master.mav.command_long_send(
+            self.settings.target_system,  # target_system
+            self.settings.target_component,  # target_component
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,  # command
+            0,  # confirmation
+            message_id,  # param1
+            interval_us,  # param2
+            0,  # param3
+            0,  # param4
+            0,  # param5
+            0,  # param6
+            response_target,  # param7
         )
 
     def request_camera_information(self):
