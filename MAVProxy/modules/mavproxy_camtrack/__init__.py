@@ -1,192 +1,25 @@
 """
 MAVProxy camera tracking module
 
-https://mavlink.io/en/services/gimbal_v2.html
+Reference
+---------
 
-ComponentID
-- MAV_COMP_ID_GIMBAL
+MAVLink documentation
 
-- MAV_TYPE = MAV_TYPE_GIMBAL
-
-Non-mavlink gimbal
-- numbers 1,2,3,4,5,6 are reserved for non-mavlink gimbal devices
-- gimbal_device_id = 1,..., 6
+- https://mavlink.io/en/services/gimbal_v2.html
+- https://mavlink.io/en/services/camera.html#camera-protocol-v2
 
 
-Discovery
-- GIMBAL_MANAGER_INFORMATION
-  - GCS send MAV_CMD_REQUEST_MESSAGE for GIMBAL_MANAGER_INFORMATION
-  - FC respond GIMBAL_MANAGER_INFORMATION
-  - mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_MANAGER_INFORMATION
+ArduPilot MAVLink handlers
 
-- GIMBAL_DEVICE_INFORMATION
-  - NOTE: request failing in SITL for a servo gimbal (MNT1_TYPE 1 # Servo)
-    - The only backend that implements handle_gimbal_device_information
-      is AP_Mount_Gremsy
-    - The default implementaton does nothing (no response)
-  - GCS send MAV_CMD_REQUEST_MESSAGE for GIMBAL_DEVICE_INFORMATION
-  - FC respond GIMBAL_DEVICE_INFORMATION
-  - mavutil.mavlink.MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION
+- https://github.com/ArduPilot/ardupilot/blob/master/libraries/GCS_MAVLink/GCS_Common.cpp
 
 
-Gimbal implementation in GCS_MAVLINK
+pymavlink 
 
-GCS_MAVLINK::handle_command_int_packet
-#if HAL_MOUNT_ENABLED
-    case MAV_CMD_DO_SET_ROI_SYSID:
-    case MAV_CMD_DO_MOUNT_CONFIGURE:          // (deprecated)
-    case MAV_CMD_DO_MOUNT_CONTROL:            // (deprecated)
-    case MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW:
-    case MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE:
-        return handle_command_mount(packet, msg);
-#endif  // HAL_MOUNT_ENABLED
-
-GCS_MAVLINK::try_send_message
-#if HAL_MOUNT_ENABLED
-    case MSG_GIMBAL_DEVICE_ATTITUDE_STATUS:
-        CHECK_PAYLOAD_SIZE(GIMBAL_DEVICE_ATTITUDE_STATUS);
-        send_gimbal_device_attitude_status();
-        break;
-    case MSG_AUTOPILOT_STATE_FOR_GIMBAL_DEVICE:
-        CHECK_PAYLOAD_SIZE(AUTOPILOT_STATE_FOR_GIMBAL_DEVICE);
-        send_autopilot_state_for_gimbal_device();
-        break;
-    case MSG_GIMBAL_MANAGER_INFORMATION:
-        CHECK_PAYLOAD_SIZE(GIMBAL_MANAGER_INFORMATION);
-        send_gimbal_manager_information();
-        break;
-    case MSG_GIMBAL_MANAGER_STATUS:
-        CHECK_PAYLOAD_SIZE(GIMBAL_MANAGER_STATUS);
-        send_gimbal_manager_status();
-        break;
-#endif  // HAL_MOUNT_ENABLED
-
-GCS_MAVLINK::handle_message
-#if HAL_MOUNT_ENABLED
-#if AP_MAVLINK_MSG_MOUNT_CONFIGURE_ENABLED
-    case MAVLINK_MSG_ID_MOUNT_CONFIGURE: // deprecated. Use MAV_CMD_DO_MOUNT_CONFIGURE
-        send_received_message_deprecation_warning("MOUNT_CONFIGURE");
-        handle_mount_message(msg);
-        break;
-#endif
-#if AP_MAVLINK_MSG_MOUNT_CONTROL_ENABLED
-    case MAVLINK_MSG_ID_MOUNT_CONTROL: // deprecated. Use MAV_CMD_DO_MOUNT_CONTROL
-        send_received_message_deprecation_warning("MOUNT_CONTROL");
-        handle_mount_message(msg);
-        break;
-#endif
-    case MAVLINK_MSG_ID_GIMBAL_REPORT:              // only used by AP_Mount_SoloGimbal
-    case MAVLINK_MSG_ID_GIMBAL_DEVICE_INFORMATION:
-    case MAVLINK_MSG_ID_GIMBAL_DEVICE_ATTITUDE_STATUS:
-    case MAVLINK_MSG_ID_GIMBAL_MANAGER_SET_ATTITUDE:
-    case MAVLINK_MSG_ID_GIMBAL_MANAGER_SET_PITCHYAW:
-        handle_mount_message(msg);
-        break;
-#endif
-
-Camera implementation in GCS_MAVLINK
-
-#if AP_CAMERA_ENABLED
-        { MAVLINK_MSG_ID_CAMERA_FEEDBACK,       MSG_CAMERA_FEEDBACK},
-        { MAVLINK_MSG_ID_CAMERA_INFORMATION,    MSG_CAMERA_INFORMATION},
-        { MAVLINK_MSG_ID_CAMERA_SETTINGS,       MSG_CAMERA_SETTINGS},
-        { MAVLINK_MSG_ID_CAMERA_FOV_STATUS,     MSG_CAMERA_FOV_STATUS},
-        { MAVLINK_MSG_ID_CAMERA_CAPTURE_STATUS, MSG_CAMERA_CAPTURE_STATUS},
-#if AP_CAMERA_SEND_THERMAL_RANGE_ENABLED
-        { MAVLINK_MSG_ID_CAMERA_THERMAL_RANGE,  MSG_CAMERA_THERMAL_RANGE},
-#endif // AP_CAMERA_SEND_THERMAL_RANGE_ENABLED
-#if AP_MAVLINK_MSG_VIDEO_STREAM_INFORMATION_ENABLED
-        { MAVLINK_MSG_ID_VIDEO_STREAM_INFORMATION, MSG_VIDEO_STREAM_INFORMATION},
-#endif // AP_MAVLINK_MSG_VIDEO_STREAM_INFORMATION_ENABLED
-#endif // AP_CAMERA_ENABLED
-
-
-GCS_MAVLINK::handle_message
-#if AP_CAMERA_ENABLED
-    case MAVLINK_MSG_ID_DIGICAM_CONTROL:
-    case MAVLINK_MSG_ID_GOPRO_HEARTBEAT: // heartbeat from a GoPro in Solo gimbal
-    case MAVLINK_MSG_ID_CAMERA_INFORMATION:
-        {
-            AP_Camera *camera = AP::camera();
-            if (camera == nullptr) {
-                return;
-            }
-            camera->handle_message(chan, msg);
-        }
-        break;
-#endif
-
-GCS_MAVLINK::handle_command_int_packet
-#if AP_CAMERA_ENABLED
-    case MAV_CMD_DO_DIGICAM_CONFIGURE:
-    case MAV_CMD_DO_DIGICAM_CONTROL:
-    case MAV_CMD_DO_SET_CAM_TRIGG_DIST:
-    case MAV_CMD_SET_CAMERA_ZOOM:
-    case MAV_CMD_SET_CAMERA_FOCUS:
-    case MAV_CMD_SET_CAMERA_SOURCE:
-    case MAV_CMD_IMAGE_START_CAPTURE:
-    case MAV_CMD_IMAGE_STOP_CAPTURE:
-    case MAV_CMD_CAMERA_TRACK_POINT:
-    case MAV_CMD_CAMERA_TRACK_RECTANGLE:
-    case MAV_CMD_CAMERA_STOP_TRACKING:
-    case MAV_CMD_VIDEO_START_CAPTURE:
-    case MAV_CMD_VIDEO_STOP_CAPTURE:
-        return handle_command_camera(packet);
-#endif
-
-GCS_MAVLINK::try_send_message
-#if AP_CAMERA_ENABLED
-    case MSG_CAMERA_FEEDBACK:
-    case MSG_CAMERA_INFORMATION:
-    case MSG_CAMERA_SETTINGS:
-#if AP_CAMERA_SEND_FOV_STATUS_ENABLED
-    case MSG_CAMERA_FOV_STATUS:
-#endif
-    case MSG_CAMERA_CAPTURE_STATUS:
-#if AP_CAMERA_SEND_THERMAL_RANGE_ENABLED
-    case MSG_CAMERA_THERMAL_RANGE:
-#endif
-#if AP_MAVLINK_MSG_VIDEO_STREAM_INFORMATION_ENABLED
-    case MSG_VIDEO_STREAM_INFORMATION:
-#endif // AP_MAVLINK_MSG_VIDEO_STREAM_INFORMATION_ENABLED
-        {
-            AP_Camera *camera = AP::camera();
-            if (camera == nullptr) {
-                break;
-            }
-            return camera->send_mavlink_message(*this, id);
-        }
-#endif  // AP_CAMERA_ENABLED
-
-
-
-
-pymavlink gimbal commands
-from pymavlink.dialects.v20.ardupilotmega import MAVLink
-- gimbal_control_send
-- gimbal_device_attitude_status_send
-- gimbal_device_information_send
-- gimbal_device_set_attitude_send
-- gimbal_manager_information_send
-- gimbal_manager_set_attitude_send
-- gimbal_manager_set_manual_control_send
-- gimbal_manager_set_pitchyaw_send
-- gimbal_manager_status_send
-- gimbal_report_send
-- gimbal_torque_cmd_report_send
-
-
-pymavlink camera commands
-- camera_capture_status_send
-- camera_feedback_send
-- camera_fov_status_send
-- camera_image_captured_send
-- camera_information_send
-- camera_settings_send
-- camera_status_send
-- camera_tracking_geo_status_send
-- camera_tracking_image_status_send
-- camera_trigger_send
+- pymavlink.dialects.v20.ardupilotmega.MAVLink
+- MAVLink.gimbal_*
+- MAVLink.camera_*
 """
 
 import time
