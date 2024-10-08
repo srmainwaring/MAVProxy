@@ -70,30 +70,57 @@ from gi.repository import Gst
 
 
 class CameraCapFlags(Enum):
-    # Camera is able to record video
-    CAPTURE_VIDEO = 1
-    # Camera is able to capture images
-    CAPTURE_IMAGE = 2
-    # Camera has separate Video and Image/Photo modes
-    HAS_MODES = 4
-    # Camera can capture images while in video mode
-    CAN_CAPTURE_IMAGE_IN_VIDEO_MODE = 8
-    # Camera can capture videos while in Photo/Image mode
-    CAN_CAPTURE_VIDEO_IN_IMAGE_MODE = 16
-    # Camera has image survey mode
-    HAS_IMAGE_SURVEY_MODE = 32
-    # Camera has basic zoom control
-    HAS_BASIC_ZOOM = 64
-    # Camera has basic focus control
-    HAS_BASIC_FOCUS = 128
-    # Camera has video streaming capabilities
-    HAS_VIDEO_STREAM = 256
-    # Camera supports tracking of a point
-    HAS_TRACKING_POINT = 512
-    # Camera supports tracking of a selection rectangle
-    HAS_TRACKING_RECTANGLE = 1024
-    # Camera supports tracking geo status
-    HAS_TRACKING_GEO_STATUS = 2048
+    """
+    https://mavlink.io/en/messages/common.html#CAMERA_CAP_FLAGS
+    """
+
+    CAPTURE_VIDEO = mavutil.mavlink.CAMERA_CAP_FLAGS_CAPTURE_VIDEO
+    CAPTURE_IMAGE = mavutil.mavlink.CAMERA_CAP_FLAGS_CAPTURE_IMAGE
+    HAS_MODES = mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_MODES
+    CAN_CAPTURE_IMAGE_IN_VIDEO_MODE = (
+        mavutil.mavlink.CAMERA_CAP_FLAGS_CAN_CAPTURE_IMAGE_IN_VIDEO_MODE
+    )
+    CAN_CAPTURE_VIDEO_IN_IMAGE_MODE = (
+        mavutil.mavlink.CAMERA_CAP_FLAGS_CAN_CAPTURE_VIDEO_IN_IMAGE_MODE
+    )
+    HAS_IMAGE_SURVEY_MODE = mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_IMAGE_SURVEY_MODE
+    HAS_BASIC_ZOOM = mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_BASIC_ZOOM
+    HAS_BASIC_FOCUS = mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_BASIC_FOCUS
+    HAS_VIDEO_STREAM = mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_VIDEO_STREAM
+    HAS_TRACKING_POINT = mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_TRACKING_POINT
+    HAS_TRACKING_RECTANGLE = mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_TRACKING_RECTANGLE
+    HAS_TRACKING_GEO_STATUS = mavutil.mavlink.CAMERA_CAP_FLAGS_HAS_TRACKING_GEO_STATUS
+
+
+class CameraTrackingStatusFlags(Enum):
+    """
+    https://mavlink.io/en/messages/common.html#CAMERA_TRACKING_STATUS_FLAGS
+    """
+
+    IDLE = mavutil.mavlink.CAMERA_TRACKING_STATUS_FLAGS_IDLE
+    ACTIVE = mavutil.mavlink.CAMERA_TRACKING_STATUS_FLAGS_ACTIVE
+    ERROR = mavutil.mavlink.CAMERA_TRACKING_STATUS_FLAGS_ERROR
+
+
+class CameraTrackingMode(Enum):
+    """
+    https://mavlink.io/en/messages/common.html#CAMERA_TRACKING_MODE
+    """
+
+    NONE = mavutil.mavlink.CAMERA_TRACKING_MODE_NONE
+    POINT = mavutil.mavlink.CAMERA_TRACKING_MODE_POINT
+    RECTANGLE = mavutil.mavlink.CAMERA_TRACKING_MODE_RECTANGLE
+
+
+class CameraTrackingTargetData(Enum):
+    """
+    https://mavlink.io/en/messages/common.html#CAMERA_TRACKING_TARGET_DATA
+    """
+
+    NONE = mavutil.mavlink.CAMERA_TRACKING_TARGET_DATA_NONE
+    EMBEDDED = mavutil.mavlink.CAMERA_TRACKING_TARGET_DATA_EMBEDDED
+    RENDERED = mavutil.mavlink.CAMERA_TRACKING_TARGET_DATA_RENDERED
+    IN_STATUS = mavutil.mavlink.CAMERA_TRACKING_TARGET_DATA_IN_STATUS
 
 
 class OnboardController:
@@ -486,12 +513,17 @@ class CameraTrackController:
         self._track_point = None
         self._track_rect = None
 
-        # Start the tracker thread
+        # Start the mavlink thread
         self._mavlink_in_queue = queue.Queue()
         self._mavlink_out_queue = queue.Queue()
         self._mavlink_thread = threading.Thread(target=self._mavlink_task)
         self._mavlink_thread.daemon = True
         self._mavlink_thread.start()
+
+        # Start the send tracking status thread
+        self._send_status_thread = threading.Thread(target=self._send_status_task)
+        self._send_status_thread.daemon = True
+        self._send_status_thread.start()
 
     def track_type(self):
         """
@@ -570,6 +602,33 @@ class CameraTrackController:
         )
         print("Sent camera information")
 
+    def _send_camera_tracking_image_status(self):
+        # TODO: set in update loop
+        tracking_status = CameraTrackingStatusFlags.IDLE.value
+        tracking_mode = CameraTrackingMode.NONE.value
+        target_data = CameraTrackingTargetData.NONE.value
+        point_x = float("nan")
+        point_y = float("nan")
+        radius = float("nan")
+        rec_top_x = float("nan")
+        rec_top_y = float("nan")
+        rec_bottom_x = float("nan")
+        rec_bottom_y = float("nan")
+
+        msg = self._connection.mav.camera_tracking_image_status_encode(
+            tracking_status,
+            tracking_mode,
+            target_data,
+            point_x,
+            point_y,
+            radius,
+            rec_top_x,
+            rec_top_y,
+            rec_bottom_x,
+            rec_bottom_y,
+        )
+        self._connection.mav.send(msg)
+
     def _handle_camera_track_point(self, msg):
         print("Got COMMAND_LONG: CAMERA_TRACK_POINT")
         # Parameters are a normalised point.
@@ -645,6 +704,27 @@ class CameraTrackController:
             sleep_time = max(0.0, update_period - elapsed_time)
             time.sleep(sleep_time)
 
+    def _send_status_task(self):
+        """
+        Send camera tracking image status.
+        """
+        # TODO: stop sending image status when tracking stopped
+        # TODO: set streaming rate using MAV_CMD_SET_MESSAGE_INTERVAL 
+
+        update_rate = 2.0
+        update_period = 1.0 / update_rate
+
+        while True:
+
+            def __send_message():
+                self._send_camera_tracking_image_status()
+
+            start_time = time.time()
+            __send_message()
+            elapsed_time = time.time() - start_time
+            sleep_time = max(0.0, update_period - elapsed_time)
+            time.sleep(sleep_time)
+
 
 class GimbalController:
     """
@@ -689,7 +769,7 @@ class GimbalController:
         self._control_thread.daemon = True
         self._control_thread.start()
 
-        # Start the move gimbal thread
+        # Start the mavlink thread
         self._mavlink_thread = threading.Thread(target=self._mavlink_task)
         self._mavlink_thread.daemon = True
         self._mavlink_thread.start()
@@ -808,7 +888,9 @@ class GimbalController:
             time.sleep(sleep_time)
 
     def _mavlink_task(self):
-
+        """
+        Process mavlink messages relevant to gimbal management.
+        """
         update_rate = 1000.0
         update_period = 1.0 / update_rate
 
