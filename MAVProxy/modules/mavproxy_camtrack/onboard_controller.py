@@ -603,17 +603,45 @@ class CameraTrackController:
         print("Sent camera information")
 
     def _send_camera_tracking_image_status(self):
-        # TODO: set in update loop
-        tracking_status = CameraTrackingStatusFlags.IDLE.value
-        tracking_mode = CameraTrackingMode.NONE.value
-        target_data = CameraTrackingTargetData.NONE.value
-        point_x = float("nan")
-        point_y = float("nan")
-        radius = float("nan")
-        rec_top_x = float("nan")
-        rec_top_y = float("nan")
-        rec_bottom_x = float("nan")
-        rec_bottom_y = float("nan")
+        with self._lock:
+            track_type = self._track_type
+            track_point = self._track_point
+            track_rect = self._track_rect
+
+        # TODO: use trackers bounding box instead of initial target
+        if track_type is CameraTrackType.NONE:
+            tracking_status = CameraTrackingStatusFlags.IDLE.value
+            tracking_mode = CameraTrackingMode.NONE.value
+            target_data = CameraTrackingTargetData.NONE.value
+            point_x = float("nan")
+            point_y = float("nan")
+            radius = float("nan")
+            rec_top_x = float("nan")
+            rec_top_y = float("nan")
+            rec_bottom_x = float("nan")
+            rec_bottom_y = float("nan")
+        elif track_type is CameraTrackType.POINT:
+            tracking_status = CameraTrackingStatusFlags.ACTIVE.value
+            tracking_mode = CameraTrackingMode.POINT.value
+            target_data = CameraTrackingTargetData.IN_STATUS.value
+            point_x = track_point.point_x
+            point_y = track_point.point_y
+            radius = track_point.radius
+            rec_top_x = float("nan")
+            rec_top_y = float("nan")
+            rec_bottom_x = float("nan")
+            rec_bottom_y = float("nan")
+        elif track_type is CameraTrackType.RECTANGLE:
+            tracking_status = CameraTrackingStatusFlags.ACTIVE.value
+            tracking_mode = CameraTrackingMode.RECTANGLE.value
+            target_data = CameraTrackingTargetData.IN_STATUS.value
+            point_x = float("nan")
+            point_y = float("nan")
+            radius = float("nan")
+            rec_top_x = track_rect.top_left_x
+            rec_top_y = track_rect.top_left_y
+            rec_bottom_x = track_rect.bot_right_x
+            rec_bottom_y = track_rect.bot_right_y
 
         msg = self._connection.mav.camera_tracking_image_status_encode(
             tracking_status,
@@ -709,7 +737,7 @@ class CameraTrackController:
         Send camera tracking image status.
         """
         # TODO: stop sending image status when tracking stopped
-        # TODO: set streaming rate using MAV_CMD_SET_MESSAGE_INTERVAL 
+        # TODO: set streaming rate using MAV_CMD_SET_MESSAGE_INTERVAL
 
         update_rate = 2.0
         update_period = 1.0 / update_rate
