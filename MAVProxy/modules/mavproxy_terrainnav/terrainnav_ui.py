@@ -20,7 +20,9 @@ class TerrainNavFrame(wx.Frame):
         self._start_time = time.time()
 
         # buttons
-        button_size = (100, 25)
+        button_size = (120, 25)
+
+        # locations
         self._button_set_start = wx.Button(
             self, id=wx.ID_ANY, label="Set Start", size=button_size
         )
@@ -33,9 +35,11 @@ class TerrainNavFrame(wx.Frame):
         self._button_add_wp = wx.Button(
             self, id=wx.ID_ANY, label="Add Waypoint", size=button_size
         )
+        # planning
         self._button_run_planner = wx.Button(
             self, id=wx.ID_ANY, label="Run Planner", size=button_size
         )
+        # navigation actions
         self._button_hold = wx.Button(
             self, id=wx.ID_ANY, label="Hold", size=button_size
         )
@@ -50,6 +54,17 @@ class TerrainNavFrame(wx.Frame):
         )
         self._button_return = wx.Button(
             self, id=wx.ID_ANY, label="Return", size=button_size
+        )
+
+        # terrain visualisation
+        self._button_show_contours = wx.Button(
+            self, id=wx.ID_ANY, label="Show Contours", size=button_size
+        )
+        self._button_hide_contours = wx.Button(
+            self, id=wx.ID_ANY, label="Hide Contours", size=button_size
+        )
+        self._button_remove_contours = wx.Button(
+            self, id=wx.ID_ANY, label="Remove Contours", size=button_size
         )
 
         # layout
@@ -69,11 +84,26 @@ class TerrainNavFrame(wx.Frame):
         self._vert_sizer3.Add(self._button_abort, proportion=0, flag=wx.EXPAND)
         self._vert_sizer3.Add(self._button_return, proportion=0, flag=wx.EXPAND)
 
-        self._horz_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self._horz_sizer.Add(self._vert_sizer1, proportion=0, flag=wx.EXPAND)
-        self._horz_sizer.Add(self._vert_sizer2, proportion=0, flag=wx.EXPAND)
-        self._horz_sizer.Add(self._vert_sizer3, proportion=0, flag=wx.EXPAND)
-        self.SetSizer(self._horz_sizer)
+        self._vert_sizer4 = wx.BoxSizer(wx.VERTICAL)
+        self._vert_sizer4.Add(self._button_show_contours, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer4.Add(self._button_hide_contours, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer4.Add(
+            self._button_remove_contours, proportion=0, flag=wx.EXPAND
+        )
+
+        self._horz_sizer1 = wx.BoxSizer(wx.HORIZONTAL)
+        self._horz_sizer1.Add(self._vert_sizer1, proportion=0, flag=wx.EXPAND)
+        self._horz_sizer1.Add(self._vert_sizer2, proportion=0, flag=wx.EXPAND)
+        self._horz_sizer1.Add(self._vert_sizer3, proportion=0, flag=wx.EXPAND)
+
+        self._horz_sizer2 = wx.BoxSizer(wx.HORIZONTAL)
+        self._horz_sizer2.Add(self._vert_sizer4, proportion=0, flag=wx.EXPAND)
+
+        # stack rows of buttons
+        self._vert_sizer0 = wx.BoxSizer(wx.VERTICAL)
+        self._vert_sizer0.Add(self._horz_sizer1, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer0.Add(self._horz_sizer2, proportion=0, flag=wx.EXPAND)
+        self.SetSizer(self._vert_sizer0)
 
         # button events
         self.Bind(wx.EVT_BUTTON, self.on_set_start_pushed, self._button_set_start)
@@ -88,6 +118,16 @@ class TerrainNavFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.on_rollout_pushed, self._button_rollout)
         self.Bind(wx.EVT_BUTTON, self.on_abort_pushed, self._button_abort)
         self.Bind(wx.EVT_BUTTON, self.on_return_pushed, self._button_return)
+
+        self.Bind(
+            wx.EVT_BUTTON, self.on_show_contours_pushed, self._button_show_contours
+        )
+        self.Bind(
+            wx.EVT_BUTTON, self.on_hide_contours_pushed, self._button_hide_contours
+        )
+        self.Bind(
+            wx.EVT_BUTTON, self.on_remove_contours_pushed, self._button_remove_contours
+        )
 
         # events
         self.Bind(wx.EVT_TIMER, self.on_timer, self._timer)
@@ -168,4 +208,16 @@ class TerrainNavFrame(wx.Frame):
 
     def on_return_pushed(self, event):
         msg = terrainnav_msgs.Return()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_show_contours_pushed(self, event):
+        msg = terrainnav_msgs.ShowContours()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_hide_contours_pushed(self, event):
+        msg = terrainnav_msgs.HideContours()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_remove_contours_pushed(self, event):
+        msg = terrainnav_msgs.RemoveContours()
         self._state.ui_pipe_send.send(msg)
