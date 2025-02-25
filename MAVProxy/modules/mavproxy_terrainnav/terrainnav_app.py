@@ -18,7 +18,7 @@ class TerrainNavApp:
     """
 
     def __init__(self, title):
-        self._title = title
+        self.title = title
 
         # create pipes for communication from the app backend to the UI
         self.parent_pipe_recv, self.ui_pipe_send = multiproc.Pipe(duplex=False)
@@ -44,7 +44,7 @@ class TerrainNavApp:
         # create the wx application and pass self as the state
         app = wx.App()
         app.frame = terrainnav_ui.TerrainNavFrame(
-            state=self, title=self._title, size=(300, 300)
+            state=self, title=self.title, size=(360, 300)
         )
         app.frame.SetDoubleBuffered(True)
         app.frame.Show()
@@ -98,33 +98,50 @@ class TerrainNavApp:
         """
         return self.ui_process is not None and self.ui_process.is_alive()
 
-    def process_ui_msgs(self):
-        while self.parent_pipe_recv.poll():
-            msg = self.parent_pipe_recv.recv()
+    # TODO: move to module as we require the module state, but cannot pass
+    #       the state the the app object, as the state context conflicts with
+    #       the UI task and the process will not start
+    #
+    # def process_ui_msgs(self):
+    #     while self.parent_pipe_recv.poll():
+    #         msg = self.parent_pipe_recv.recv()
+    #
+    #         if isinstance(msg, terrainnav_msgs.SetStart):
+    #             print("Set Start")
+    #         elif isinstance(msg, terrainnav_msgs.SetGoal):
+    #             print("Set Goal")
+    #         elif isinstance(msg, terrainnav_msgs.AddRally):
+    #             print("Add Rally")
+    #         elif isinstance(msg, terrainnav_msgs.AddWaypoint):
+    #             print("Add Waypoint")
+    #         elif isinstance(msg, terrainnav_msgs.RunPlanner):
+    #             print("Run Planner")
+    #         elif isinstance(msg, terrainnav_msgs.Hold):
+    #             print("Hold")
+    #         elif isinstance(msg, terrainnav_msgs.Navigate):
+    #             print("Navigate")
+    #         elif isinstance(msg, terrainnav_msgs.Rollout):
+    #             print("Rollout")
+    #         elif isinstance(msg, terrainnav_msgs.Abort):
+    #             print("Abort")
+    #         elif isinstance(msg, terrainnav_msgs.Return):
+    #             print("Return")
+    #         elif isinstance(msg, terrainnav_msgs.ShowContours):
+    #             # map_module = self.module_callback("map")
+    #             # map_module.show_terrain_contours()
+    #             print("Show Terrain Contours")
+    #         elif isinstance(msg, terrainnav_msgs.HideContours):
+    #             # map_module = self.module_callback("map")
+    #             # map_module.hide_terrain_contours()
+    #             print("Hide Terrain Contours")
+    #         elif isinstance(msg, terrainnav_msgs.RemoveContours):
+    #             # map_module = self.module_callback("map")
+    #             # map_module.remove_terrain_contours()
+    #             print("Remove Terrain Contours")
+    #         else:
+    #             # TODO: raise an exception
+    #             print("terrainnav: unknown message from UI")
 
-            if isinstance(msg, terrainnav_msgs.SetStart):
-                print("Set Start") 
-            elif isinstance(msg, terrainnav_msgs.SetGoal):
-                print("Set Goal") 
-            elif isinstance(msg, terrainnav_msgs.AddRally):
-                print("Add Rally") 
-            elif isinstance(msg, terrainnav_msgs.AddWaypoint):
-                print("Add Waypoint") 
-            elif isinstance(msg, terrainnav_msgs.RunPlanner):
-                print("Run Planner") 
-            elif isinstance(msg, terrainnav_msgs.Hold):
-                print("Hold") 
-            elif isinstance(msg, terrainnav_msgs.Navigate):
-                print("Navigate") 
-            elif isinstance(msg, terrainnav_msgs.Rollout):
-                print("Rollout") 
-            elif isinstance(msg, terrainnav_msgs.Abort):
-                print("Abort") 
-            elif isinstance(msg, terrainnav_msgs.Return):
-                print("Return") 
-            else:
-                # TODO: raise an exception
-                print("terrainnav: unknown message from UI") 
 
 if __name__ == "__main__":
     """

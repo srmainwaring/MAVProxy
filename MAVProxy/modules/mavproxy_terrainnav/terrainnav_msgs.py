@@ -41,3 +41,15 @@ class Abort:
 class Return:
   def __init__(self):
       pass
+
+class ShowContours:
+  def __init__(self):
+      pass
+
+class HideContours:
+  def __init__(self):
+      pass
+
+class RemoveContours:
+  def __init__(self):
+      pass
