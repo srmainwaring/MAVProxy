@@ -2,6 +2,7 @@
 Terrain navigation module
 """
 
+import math
 import time
 
 from MAVProxy.mavproxy import MPState
@@ -17,6 +18,18 @@ from MAVProxy.modules.mavproxy_terrainnav import terrainnav_msgs
 
 if mp_util.has_wxpython:
     from MAVProxy.modules.lib.mp_menu import MPMenuSubMenu
+
+# open motion planner
+from ompl import base as ob
+from ompl import geometric as og
+from ompl import util as ou
+
+# terrain navigation
+from terrain_nav_py.dubins_airplane import DubinsAirplaneStateSpace
+from terrain_nav_py.grid_map import GridMapSRTM
+from terrain_nav_py.path import Path
+from terrain_nav_py.terrain_map import TerrainMap
+from terrain_nav_py.terrain_ompl_rrt import TerrainOmplRrt
 
 
 class TerrainNavModule(mp_module.MPModule):
@@ -68,6 +81,24 @@ class TerrainNavModule(mp_module.MPModule):
         self._map_circle_radius = 50
         self._map_circle_linewidth = 2
 
+        # *** planner state ***
+        # TODO: populate from vehicle params
+        self._turning_radius = self._map_circle_radius
+        self._climb_angle_rad = 0.15
+        self._max_altitude = 120.0
+        self._min_altitude = 50.0
+        self._time_budget = 20.0
+
+        # TODO: populate from settings
+        self._grid_spacing = 100.0
+        self._grid_length = 10000.0
+
+        self._grid_map = None
+        self._terrain_map = None
+        self._da_space = None
+        self._planner = None
+        # self._candidate_path = None
+
     def mavlink_packet(self, m) -> None:
         """
         Process a mavlink message.
@@ -114,7 +145,7 @@ class TerrainNavModule(mp_module.MPModule):
             elif isinstance(msg, terrainnav_msgs.AddWaypoint):
                 print("Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
-                print("Run Planner")
+                self.run_planner()
             elif isinstance(msg, terrainnav_msgs.Hold):
                 print("Hold")
             elif isinstance(msg, terrainnav_msgs.Navigate):
@@ -216,3 +247,125 @@ class TerrainNavModule(mp_module.MPModule):
         map_module.map.remove_object(self._map_layer_id)
 
         self._map_layer_initialised = False
+
+    def init_planner(self):
+        # get home position
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+        home = wp_module.get_home()
+        if home is None:
+            return
+
+        home_lat = home.x
+        home_lon = home.y
+
+        print(f"Set grid map home: {home_lat}, {home_lon}")
+        self._grid_map = GridMapSRTM(home_lat=home_lat, home_lon=home_lon)
+        self._grid_map.setGridSpacing(self._grid_spacing)
+        self._grid_map.setGridLength(self._grid_length)
+        self._terrain_map = TerrainMap()
+        self._terrain_map.setGridMap(self._grid_map)
+
+        print(f"Create Dubins state space")
+        self._da_space = DubinsAirplaneStateSpace(
+            turningRadius=self._turning_radius, gam=self._climb_angle_rad
+        )
+        self._planner = TerrainOmplRrt(self._da_space)
+        self._planner.setMap(self._terrain_map)
+        self._planner.setAltitudeLimits(
+            max_altitude=self._max_altitude, min_altitude=self._min_altitude
+        )
+        self._planner.setBoundsFromMap(self._terrain_map.getGridMap())
+
+    def run_planner(self):
+        if self._planner is None:
+            print("Initialising planner")
+            self.init_planner()
+
+        # TODO: store grid map origin (lat, lon) and use here for offsets
+        # get home position
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+        home = wp_module.get_home()
+        if home is None:
+            return
+
+        map_lat = home.x
+        map_lon = home.y
+
+        # TODO: run the planner
+        # calculate start position (ENU)
+        (start_lat, start_lon) = self._start_location
+        if start_lat is None or start_lon is None:
+            print("Planner must have valid start")
+            return
+
+        # TODO: replace with a function
+        distance = mp_util.gps_distance(map_lat, map_lon, start_lat, start_lon)
+        bearing_deg = mp_util.gps_bearing(map_lat, map_lon, start_lat, start_lon)
+        bearing_rad = math.radians(bearing_deg)
+        east = distance * math.sin(bearing_rad)
+        north = distance * math.cos(bearing_rad)
+        # TODO: need to supply alt relative to terrain
+        start_pos = [east, north, 60.0]
+
+        # calculate goal position (ENU)
+        (goal_lat, goal_lon) = self._goal_location
+        if goal_lat is None or goal_lon is None:
+            print("Planner must have valid goal")
+
+        # TODO: replace with a function
+        distance = mp_util.gps_distance(map_lat, map_lon, goal_lat, goal_lon)
+        bearing_deg = mp_util.gps_bearing(map_lat, map_lon, goal_lat, goal_lon)
+        bearing_rad = math.radians(bearing_deg)
+        east = distance * math.sin(bearing_rad)
+        north = distance * math.cos(bearing_rad)
+        # TODO: need to supply alt relative to terrain
+        goal_pos = [east, north, 60.0]
+
+        # adjust the start and goal altitudes above terrain
+        start_pos[2] += self._grid_map.atPosition("elevation", start_pos)
+        goal_pos[2] += self._grid_map.atPosition("elevation", goal_pos)
+
+        print("Run planner")
+        print(f"start_pos:  {start_pos}")
+        print(f"goal_pos:   {goal_pos}")
+        self._planner.setupProblem2(start_pos, goal_pos, self._turning_radius)
+        candidate_path = Path()
+        self._planner.Solve1(time_budget=self._time_budget, path=candidate_path)
+
+        position = candidate_path.position()
+        if len(position) == 0:
+            print("Failed to solve for trajectory")
+            return
+
+        self.draw_path(self._map_path_id, candidate_path, map_lat, map_lon)
+
+    def draw_path(self, id, path, map_lat, map_lon):
+        # TODO: problem here is the path may be updated
+        #       but not plotted if this fails
+        map_module = self.module("map")
+        if map_module is None:
+            return
+
+        # convert positions [(east, north)] to polygons [(lat, lon)]
+        polygon = []
+        for pos in path.position():
+            east = pos[0]
+            north = pos[1]
+            point = mp_util.gps_offset(map_lat, map_lon, east, north)
+            polygon.append(point)
+
+        if len(polygon) > 1:
+            colour = (0, 0, 255)
+            slip_polygon = mp_slipmap.SlipPolygon(
+                id,
+                polygon,
+                layer=self._map_layer_id,
+                linewidth=2,
+                colour=colour,
+                showcircles=False,
+            )
+            map_module.map.add_object(slip_polygon)
