@@ -103,44 +103,7 @@ class TerrainNavApp:
     #       the UI task and the process will not start
     #
     # def process_ui_msgs(self):
-    #     while self.parent_pipe_recv.poll():
-    #         msg = self.parent_pipe_recv.recv()
-    #
-    #         if isinstance(msg, terrainnav_msgs.SetStart):
-    #             print("Set Start")
-    #         elif isinstance(msg, terrainnav_msgs.SetGoal):
-    #             print("Set Goal")
-    #         elif isinstance(msg, terrainnav_msgs.AddRally):
-    #             print("Add Rally")
-    #         elif isinstance(msg, terrainnav_msgs.AddWaypoint):
-    #             print("Add Waypoint")
-    #         elif isinstance(msg, terrainnav_msgs.RunPlanner):
-    #             print("Run Planner")
-    #         elif isinstance(msg, terrainnav_msgs.Hold):
-    #             print("Hold")
-    #         elif isinstance(msg, terrainnav_msgs.Navigate):
-    #             print("Navigate")
-    #         elif isinstance(msg, terrainnav_msgs.Rollout):
-    #             print("Rollout")
-    #         elif isinstance(msg, terrainnav_msgs.Abort):
-    #             print("Abort")
-    #         elif isinstance(msg, terrainnav_msgs.Return):
-    #             print("Return")
-    #         elif isinstance(msg, terrainnav_msgs.ShowContours):
-    #             # map_module = self.module_callback("map")
-    #             # map_module.show_terrain_contours()
-    #             print("Show Terrain Contours")
-    #         elif isinstance(msg, terrainnav_msgs.HideContours):
-    #             # map_module = self.module_callback("map")
-    #             # map_module.hide_terrain_contours()
-    #             print("Hide Terrain Contours")
-    #         elif isinstance(msg, terrainnav_msgs.RemoveContours):
-    #             # map_module = self.module_callback("map")
-    #             # map_module.remove_terrain_contours()
-    #             print("Remove Terrain Contours")
-    #         else:
-    #             # TODO: raise an exception
-    #             print("terrainnav: unknown message from UI")
+    #     # moved...
 
 
 if __name__ == "__main__":
