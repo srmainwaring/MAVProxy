@@ -28,6 +28,11 @@ class RunPlanner:
         pass
 
 
+class GenWaypoints:
+    def __init__(self):
+        pass
+
+
 class Hold:
     def __init__(self):
         pass
