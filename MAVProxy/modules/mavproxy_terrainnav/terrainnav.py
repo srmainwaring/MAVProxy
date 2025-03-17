@@ -257,11 +257,11 @@ class TerrainNavModule(mp_module.MPModule):
         if home is None:
             return
 
-        home_lat = home.x
-        home_lon = home.y
+        map_lat = home.x
+        map_lon = home.y
 
-        print(f"Set grid map home: {home_lat}, {home_lon}")
-        self._grid_map = GridMapSRTM(home_lat=home_lat, home_lon=home_lon)
+        print(f"Set grid map origin: {map_lat}, {map_lon}")
+        self._grid_map = GridMapSRTM(map_lat=map_lat, map_lon=map_lon)
         self._grid_map.setGridSpacing(self._grid_spacing)
         self._grid_map.setGridLength(self._grid_length)
         self._terrain_map = TerrainMap()
