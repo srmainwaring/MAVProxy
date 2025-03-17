@@ -24,6 +24,8 @@ from ompl import base as ob
 from ompl import geometric as og
 from ompl import util as ou
 
+from pymavlink import mavutil
+
 # terrain navigation
 from terrain_nav_py.dubins_airplane import DubinsAirplaneStateSpace
 from terrain_nav_py.grid_map import GridMapSRTM
@@ -78,7 +80,7 @@ class TerrainNavModule(mp_module.MPModule):
         self._goal_location = (None, None)
 
         # TODO: make these mp_settings
-        self._map_circle_radius = 50
+        self._map_circle_radius = 90
         self._map_circle_linewidth = 2
 
         # *** planner state ***
@@ -343,6 +345,9 @@ class TerrainNavModule(mp_module.MPModule):
 
         self.draw_path(self._map_path_id, candidate_path, map_lat, map_lon)
 
+        # TODO: generate waypoints - make optional (on button)
+        self.generate_waypoints(candidate_path, map_lat, map_lon)
+
     def draw_path(self, id, path, map_lat, map_lon):
         # TODO: problem here is the path may be updated
         #       but not plotted if this fails
@@ -369,3 +374,55 @@ class TerrainNavModule(mp_module.MPModule):
                 showcircles=False,
             )
             map_module.map.add_object(slip_polygon)
+
+    # TODO: should run on an event thread
+    def generate_waypoints(self, path, map_lat, map_lon):
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+
+        # convert positions [(east, north, alt)] to locations [(lat, lon, alt_amsl)]
+        locations = []
+        for pos in path.position():
+            east = pos[0]
+            north = pos[1]
+            alt_amsl = pos[2]
+            (lat, lon) = mp_util.gps_offset(map_lat, map_lon, east, north)
+            locations.append((lat, lon, alt_amsl))
+
+        filtered_locations = locations[::10]
+        wp_module.wploader.clear()
+        wp_module.wploader.expected_count = len(filtered_locations)
+        self.mpstate.master().waypoint_count_send(len(filtered_locations))
+
+        for count, location in enumerate(filtered_locations):
+            lat = location[0]
+            lon = location[1]
+            alt = location[2]
+            # NOTE: mavproxy_wp.py WPModule.cmd_add
+            #       mission_editor.py me_event.MEE_WRITE_WP_NUM
+            w = mavutil.mavlink.MAVLink_mission_item_message(
+                self.mpstate.settings.target_system,
+                self.mpstate.settings.target_component,
+                count,  # seq
+                mavutil.mavlink.MAV_FRAME_GLOBAL,  # frame
+                mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  # command
+                0,  # current
+                1,  # autocontinue
+                0.0,  # param1,
+                0.0,  # param2,
+                0.0,  # param3
+                0.0,  # param4
+                lat,  # x (latitude)
+                lon,  # y (longitude)
+                alt,  # z (altitude)
+            )
+
+            wp_module.wploader.add(w)
+            wsend = wp_module.wploader.wp(w.seq)
+            if self.mpstate.settings.wp_use_mission_int:
+                wsend = wp_module.wp_to_mission_item_int(w)
+            self.mpstate.master().mav.send(wsend)
+
+            #tell the wp module to expect some waypoints
+            wp_module.loading_waypoints = True
