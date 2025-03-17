@@ -39,6 +39,9 @@ class TerrainNavFrame(wx.Frame):
         self._button_run_planner = wx.Button(
             self, id=wx.ID_ANY, label="Run Planner", size=button_size
         )
+        self._button_gen_waypoints = wx.Button(
+            self, id=wx.ID_ANY, label="Gen Waypoints", size=button_size
+        )
         # navigation actions
         self._button_hold = wx.Button(
             self, id=wx.ID_ANY, label="Hold", size=button_size
@@ -76,6 +79,7 @@ class TerrainNavFrame(wx.Frame):
 
         self._vert_sizer2 = wx.BoxSizer(wx.VERTICAL)
         self._vert_sizer2.Add(self._button_run_planner, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer2.Add(self._button_gen_waypoints, proportion=0, flag=wx.EXPAND)
 
         self._vert_sizer3 = wx.BoxSizer(wx.VERTICAL)
         self._vert_sizer3.Add(self._button_hold, proportion=0, flag=wx.EXPAND)
@@ -112,6 +116,9 @@ class TerrainNavFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.on_add_wp_pushed, self._button_add_wp)
 
         self.Bind(wx.EVT_BUTTON, self.on_run_planner_pushed, self._button_run_planner)
+        self.Bind(
+            wx.EVT_BUTTON, self.on_gen_waypoints_pushed, self._button_gen_waypoints
+        )
 
         self.Bind(wx.EVT_BUTTON, self.on_hold_pushed, self._button_hold)
         self.Bind(wx.EVT_BUTTON, self.on_navigate_pushed, self._button_navigate)
@@ -188,6 +195,10 @@ class TerrainNavFrame(wx.Frame):
 
     def on_run_planner_pushed(self, event):
         msg = terrainnav_msgs.RunPlanner()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_gen_waypoints_pushed(self, event):
+        msg = terrainnav_msgs.GenWaypoints()
         self._state.ui_pipe_send.send(msg)
 
     def on_hold_pushed(self, event):
