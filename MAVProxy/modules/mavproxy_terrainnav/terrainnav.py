@@ -96,10 +96,12 @@ class TerrainNavModule(mp_module.MPModule):
         self._grid_length = 10000.0
 
         self._grid_map = None
+        self._grid_map_lat = None
+        self._grid_map_lon = None
         self._terrain_map = None
         self._da_space = None
         self._planner = None
-        # self._candidate_path = None
+        self._candidate_path = None
 
     def mavlink_packet(self, m) -> None:
         """
@@ -148,6 +150,8 @@ class TerrainNavModule(mp_module.MPModule):
                 print("Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
                 self.run_planner()
+            elif isinstance(msg, terrainnav_msgs.GenWaypoints):
+                self.gen_waypoints()
             elif isinstance(msg, terrainnav_msgs.Hold):
                 print("Hold")
             elif isinstance(msg, terrainnav_msgs.Navigate):
@@ -259,11 +263,13 @@ class TerrainNavModule(mp_module.MPModule):
         if home is None:
             return
 
-        map_lat = home.x
-        map_lon = home.y
+        self._grid_map_lat = home.x
+        self._grid_map_lon = home.y
 
-        print(f"Set grid map origin: {map_lat}, {map_lon}")
-        self._grid_map = GridMapSRTM(map_lat=map_lat, map_lon=map_lon)
+        print(f"Set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}")
+        self._grid_map = GridMapSRTM(
+            map_lat=self._grid_map_lat, map_lon=self._grid_map_lon
+        )
         self._grid_map.setGridSpacing(self._grid_spacing)
         self._grid_map.setGridLength(self._grid_length)
         self._terrain_map = TerrainMap()
@@ -285,19 +291,6 @@ class TerrainNavModule(mp_module.MPModule):
             print("Initialising planner")
             self.init_planner()
 
-        # TODO: store grid map origin (lat, lon) and use here for offsets
-        # get home position
-        wp_module = self.module("wp")
-        if wp_module is None:
-            return
-        home = wp_module.get_home()
-        if home is None:
-            return
-
-        map_lat = home.x
-        map_lon = home.y
-
-        # TODO: run the planner
         # calculate start position (ENU)
         (start_lat, start_lon) = self._start_location
         if start_lat is None or start_lon is None:
@@ -305,8 +298,13 @@ class TerrainNavModule(mp_module.MPModule):
             return
 
         # TODO: replace with a function
-        distance = mp_util.gps_distance(map_lat, map_lon, start_lat, start_lon)
-        bearing_deg = mp_util.gps_bearing(map_lat, map_lon, start_lat, start_lon)
+        # TODO: check round trip: (lat, lon) -> (east, north) -> (lat, lon)
+        distance = mp_util.gps_distance(
+            self._grid_map_lat, self._grid_map_lon, start_lat, start_lon
+        )
+        bearing_deg = mp_util.gps_bearing(
+            self._grid_map_lat, self._grid_map_lon, start_lat, start_lon
+        )
         bearing_rad = math.radians(bearing_deg)
         east = distance * math.sin(bearing_rad)
         north = distance * math.cos(bearing_rad)
@@ -319,8 +317,12 @@ class TerrainNavModule(mp_module.MPModule):
             print("Planner must have valid goal")
 
         # TODO: replace with a function
-        distance = mp_util.gps_distance(map_lat, map_lon, goal_lat, goal_lon)
-        bearing_deg = mp_util.gps_bearing(map_lat, map_lon, goal_lat, goal_lon)
+        distance = mp_util.gps_distance(
+            self._grid_map_lat, self._grid_map_lon, goal_lat, goal_lon
+        )
+        bearing_deg = mp_util.gps_bearing(
+            self._grid_map_lat, self._grid_map_lon, goal_lat, goal_lon
+        )
         bearing_rad = math.radians(bearing_deg)
         east = distance * math.sin(bearing_rad)
         north = distance * math.cos(bearing_rad)
@@ -335,20 +337,28 @@ class TerrainNavModule(mp_module.MPModule):
         print(f"start_pos:  {start_pos}")
         print(f"goal_pos:   {goal_pos}")
         self._planner.setupProblem2(start_pos, goal_pos, self._turning_radius)
-        candidate_path = Path()
-        self._planner.Solve1(time_budget=self._time_budget, path=candidate_path)
+        self._candidate_path = Path()
+        self._planner.Solve1(time_budget=self._time_budget, path=self._candidate_path)
 
-        position = candidate_path.position()
+        # TODO: also extract the solution state vector, and verify that
+        #       each state vector satisfies the problem bounds.
+        # There may be an issue with the Dubins segments and interpolation of
+        # the segments not honouring the altitude conditions.
+
+        position = self._candidate_path.position()
         if len(position) == 0:
             print("Failed to solve for trajectory")
             return
 
-        self.draw_path(self._map_path_id, candidate_path, map_lat, map_lon)
+        self.draw_path(self._map_path_id, self._candidate_path)
 
         # TODO: generate waypoints - make optional (on button)
-        self.generate_waypoints(candidate_path, map_lat, map_lon)
+        self.generate_waypoints()
 
-    def draw_path(self, id, path, map_lat, map_lon):
+    def draw_path(self, id, path):
+        map_lat = self._grid_map_lat
+        map_lon = self._grid_map_lon
+
         # TODO: problem here is the path may be updated
         #       but not plotted if this fails
         map_module = self.module("map")
@@ -375,36 +385,51 @@ class TerrainNavModule(mp_module.MPModule):
             )
             map_module.map.add_object(slip_polygon)
 
-    # TODO: should run on an event thread
-    def generate_waypoints(self, path, map_lat, map_lon):
+    def gen_waypoints(self):
+        path = self._candidate_path
+        map_lat = self._grid_map_lat
+        map_lon = self._grid_map_lon
+
+        if path is None or map_lat is None or map_lon is None:
+            return
+
         wp_module = self.module("wp")
         if wp_module is None:
             return
 
-        # convert positions [(east, north, alt)] to locations [(lat, lon, alt_amsl)]
-        locations = []
-        for pos in path.position():
+        # apply a slicer to sample the path positions
+        stride = 10
+        filtered_positions = path.position()[::stride]
+
+        wp_module.wploader.clear()
+        wp_module.wploader.expected_count = len(filtered_positions)
+        self.mpstate.master().waypoint_count_send(len(filtered_positions))
+
+        # convert positions [(east, north, alt)] to locations [(lat, lon, alt)]
+        for seq, pos in enumerate(filtered_positions):
             east = pos[0]
             north = pos[1]
-            alt_amsl = pos[2]
-            (lat, lon) = mp_util.gps_offset(map_lat, map_lon, east, north)
-            locations.append((lat, lon, alt_amsl))
+            wp_alt = pos[2]
+            (wp_lat, wp_lon) = mp_util.gps_offset(map_lat, map_lon, east, north)
 
-        filtered_locations = locations[::10]
-        wp_module.wploader.clear()
-        wp_module.wploader.expected_count = len(filtered_locations)
-        self.mpstate.master().waypoint_count_send(len(filtered_locations))
+            # TODO: debug checks
+            # NOTE: we are seeing agl_alt < min_alt for the planner which
+            #       indicates a problem.
+            if self.module("terrain") is not None:
+                elevation_model = self.module("terrain").ElevationModel
+                ter_alt = elevation_model.GetElevation(wp_lat, wp_lon)
+                agl_alt = wp_alt - ter_alt
+                print(
+                    f"wp: {seq}, east: {east:.2f}, north: {north:.2f}, "
+                    f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt: {wp_alt:.2f}, "
+                    f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
+                )
 
-        for count, location in enumerate(filtered_locations):
-            lat = location[0]
-            lon = location[1]
-            alt = location[2]
-            # NOTE: mavproxy_wp.py WPModule.cmd_add
-            #       mission_editor.py me_event.MEE_WRITE_WP_NUM
+            # NOTE: mission_editor.py me_event.MEE_WRITE_WP_NUM
             w = mavutil.mavlink.MAVLink_mission_item_message(
                 self.mpstate.settings.target_system,
                 self.mpstate.settings.target_component,
-                count,  # seq
+                seq,  # seq
                 mavutil.mavlink.MAV_FRAME_GLOBAL,  # frame
                 mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  # command
                 0,  # current
@@ -413,9 +438,9 @@ class TerrainNavModule(mp_module.MPModule):
                 0.0,  # param2,
                 0.0,  # param3
                 0.0,  # param4
-                lat,  # x (latitude)
-                lon,  # y (longitude)
-                alt,  # z (altitude)
+                wp_lat,  # x (latitude)
+                wp_lon,  # y (longitude)
+                wp_alt,  # z (altitude)
             )
 
             wp_module.wploader.add(w)
@@ -424,5 +449,5 @@ class TerrainNavModule(mp_module.MPModule):
                 wsend = wp_module.wp_to_mission_item_int(w)
             self.mpstate.master().mav.send(wsend)
 
-            #tell the wp module to expect some waypoints
+            # tell the wp module to expect some waypoints
             wp_module.loading_waypoints = True
