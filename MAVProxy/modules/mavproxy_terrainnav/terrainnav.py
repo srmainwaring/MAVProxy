@@ -74,6 +74,7 @@ class TerrainNavModule(mp_module.MPModule):
         self._map_start_id = "terrainnav start"
         self._map_goal_id = "terrainnav goal"
         self._map_path_id = "terrainnav path"
+        self._map_states_id = "terrainnav states"
 
         # terrain navigation state
         self._start_location = (None, None)
@@ -92,7 +93,7 @@ class TerrainNavModule(mp_module.MPModule):
         self._time_budget = 20.0
 
         # TODO: populate from settings
-        self._grid_spacing = 100.0
+        self._grid_spacing = 30.0
         self._grid_length = 10000.0
 
         self._grid_map = None
@@ -223,11 +224,11 @@ class TerrainNavModule(mp_module.MPModule):
         if map_module is None:
             return
 
-        # TODO: set the colour according to whether the location is valid.
-        colour = (0, 255, 0)
-
         if not self._map_layer_initialised:
             self.init_map_layer()
+
+        # TODO: set the colour according to whether the location is valid.
+        colour = (0, 255, 0)
 
         slip_circle = mp_slipmap.SlipCircle(
             key=id,
@@ -250,6 +251,8 @@ class TerrainNavModule(mp_module.MPModule):
         # TODO: check removing unset objects is not an error.
         map_module.map.remove_object(self._map_start_id)
         map_module.map.remove_object(self._map_goal_id)
+        map_module.map.remove_object(self._map_path_id)
+        map_module.map.remove_object(self._map_states_id)
         map_module.map.remove_object(self._map_layer_id)
 
         self._map_layer_initialised = False
@@ -344,16 +347,17 @@ class TerrainNavModule(mp_module.MPModule):
         #       each state vector satisfies the problem bounds.
         # There may be an issue with the Dubins segments and interpolation of
         # the segments not honouring the altitude conditions.
+        solution_path = self._planner.getProblemSetup().getSolutionPath()
+        states = solution_path.getStates()
+        self.draw_states(self._map_states_id, states)
 
+        # verify the path is valid
         position = self._candidate_path.position()
         if len(position) == 0:
             print("Failed to solve for trajectory")
             return
 
         self.draw_path(self._map_path_id, self._candidate_path)
-
-        # TODO: generate waypoints - make optional (on button)
-        self.generate_waypoints()
 
     def draw_path(self, id, path):
         map_lat = self._grid_map_lat
@@ -364,6 +368,9 @@ class TerrainNavModule(mp_module.MPModule):
         map_module = self.module("map")
         if map_module is None:
             return
+
+        if not self._map_layer_initialised:
+            self.init_map_layer()
 
         # convert positions [(east, north)] to polygons [(lat, lon)]
         polygon = []
@@ -382,6 +389,57 @@ class TerrainNavModule(mp_module.MPModule):
                 linewidth=2,
                 colour=colour,
                 showcircles=False,
+            )
+            map_module.map.add_object(slip_polygon)
+
+    def draw_states(self, id, states):
+        map_lat = self._grid_map_lat
+        map_lon = self._grid_map_lon
+
+        # TODO: problem here is the path may be updated
+        #       but not plotted if this fails
+        map_module = self.module("map")
+        if map_module is None:
+            return
+
+        if not self._map_layer_initialised:
+            self.init_map_layer()
+
+        polygon = []
+        for i, state in enumerate(states):
+            pos = TerrainOmplRrt.dubinsairplanePosition(state)
+            yaw = TerrainOmplRrt.dubinsairplaneYaw(state)
+            east = pos[0]
+            north = pos[1]
+            point = mp_util.gps_offset(map_lat, map_lon, east, north)
+            polygon.append(point)
+
+            # TODO: debug checks
+            # NOTE: we are seeing agl_alt < min_alt for the planner which
+            #       indicates a problem.
+            if self.module("terrain") is not None:
+                lat = point[0]
+                lon = point[1]
+                alt = pos[2]
+                elevation_model = self.module("terrain").ElevationModel
+                ter_alt = elevation_model.GetElevation(lat, lon)
+                agl_alt = alt - ter_alt
+                print(
+                    f"state: {i}, east: {east:.2f}, north: {north:.2f}, "
+                    f"lat: {lat:.6f}, lon: {lon:.6f}, wp_alt: {alt:.2f}, "
+                    f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
+                )
+
+        if len(polygon) > 1:
+            colour = (255, 0, 0)
+            slip_polygon = mp_slipmap.SlipPolygon(
+                id,
+                polygon,
+                layer=self._map_states_id,
+                linewidth=2,
+                colour=colour,
+                showcircles=True,
+                showlines=False,
             )
             map_module.map.add_object(slip_polygon)
 
