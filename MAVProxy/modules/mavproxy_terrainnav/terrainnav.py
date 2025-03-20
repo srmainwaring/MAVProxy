@@ -519,16 +519,38 @@ class TerrainNavModule(mp_module.MPModule):
         if wp_module is None:
             return
 
-        # apply a slicer to sample the path positions
-        stride = 10
-        filtered_positions = path.position()[::stride]
+        # TODO: provide accessors on Path
+        # TODO: dt is not set - fix upstream
+        wp_spacing = 30
+        wp_num_total = 0
+        wp_positions = []
+        for i, segment in enumerate(path._segments):
+            count = segment.state_count()
+            # dt = segment.dt
+            length = segment.get_length()
+            dt = length / count
+            wp_num = max(int(length / wp_spacing), 1)
+            stride = count // wp_num
+            filtered_positions = segment.position()[::stride]
 
+            # skip first point of next Dubins curve to avoid duplicates
+            if (i % 3 == 0) and (i != 0):
+                filtered_positions = filtered_positions[:-1]
+            wp_positions.extend(filtered_positions)
+            wp_num = len(filtered_positions)
+            wp_num_total += wp_num
+            print(
+                f"segment[{i}]: count: {count}, length: {length:.2f}, dt: {dt:.2f}, "
+                f"wp_num: {wp_num}, wp_num_total: {wp_num_total}, stride: {stride}"
+            )
+
+        # prepare waypoints for load
         wp_module.wploader.clear()
-        wp_module.wploader.expected_count = len(filtered_positions)
-        self.mpstate.master().waypoint_count_send(len(filtered_positions))
+        wp_module.wploader.expected_count = len(wp_positions)
+        self.mpstate.master().waypoint_count_send(len(wp_positions))
 
         # convert positions [(east, north, alt)] to locations [(lat, lon, alt)]
-        for seq, pos in enumerate(filtered_positions):
+        for seq, pos in enumerate(wp_positions):
             east = pos.x
             north = pos.y
             wp_alt = pos.z
