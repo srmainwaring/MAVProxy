@@ -375,8 +375,8 @@ class TerrainNavModule(mp_module.MPModule):
         # convert positions [(east, north)] to polygons [(lat, lon)]
         polygon = []
         for pos in path.position():
-            east = pos[0]
-            north = pos[1]
+            east = pos.x
+            north = pos.y
             point = mp_util.gps_offset(map_lat, map_lon, east, north)
             polygon.append(point)
 
@@ -465,9 +465,9 @@ class TerrainNavModule(mp_module.MPModule):
 
         # convert positions [(east, north, alt)] to locations [(lat, lon, alt)]
         for seq, pos in enumerate(filtered_positions):
-            east = pos[0]
-            north = pos[1]
-            wp_alt = pos[2]
+            east = pos.x
+            north = pos.y
+            wp_alt = pos.z
             (wp_lat, wp_lon) = mp_util.gps_offset(map_lat, map_lon, east, north)
 
             # TODO: debug checks
