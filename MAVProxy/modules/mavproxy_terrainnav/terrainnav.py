@@ -185,9 +185,9 @@ class TerrainNavModule(mp_module.MPModule):
                 # TODO: raise an exception
                 print("terrainnav: unknown message from UI")
 
-    def init_map_layer(self):
+    def init_slip_map_layer(self):
         """
-        Initialise a map layer for terrain navigation.
+        Initialise a slip map layer for terrain navigation.
         """
         if self._map_layer_initialised:
             return
@@ -237,10 +237,7 @@ class TerrainNavModule(mp_module.MPModule):
             return
 
         if not self._map_layer_initialised:
-            self.init_map_layer()
-
-        # TODO: set the colour according to whether the location is valid.
-        colour = (0, 255, 0)
+            self.init_slip_map_layer()
 
         slip_circle = mp_slipmap.SlipCircle(
             key=id,
@@ -429,7 +426,7 @@ class TerrainNavModule(mp_module.MPModule):
             return
 
         if not self._map_layer_initialised:
-            self.init_map_layer()
+            self.init_slip_map_layer()
 
         # convert positions [(east, north)] to polygons [(lat, lon)]
         polygon = []
@@ -464,7 +461,7 @@ class TerrainNavModule(mp_module.MPModule):
             return
 
         if not self._map_layer_initialised:
-            self.init_map_layer()
+            self.init_slip_map_layer()
 
         polygon = []
         for i, state in enumerate(states):
