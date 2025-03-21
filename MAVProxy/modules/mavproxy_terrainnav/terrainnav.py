@@ -83,25 +83,33 @@ class TerrainNavModule(mp_module.MPModule):
         self._map_states_id = "terrainnav states"
 
         # terrain navigation state
-        self._start_location = (None, None)
-        self._goal_location = (None, None)
+        self._start_latlon = (None, None)
+        self._start_pos_enu = (None, None)
+        self._start_is_valid = False
 
-        # TODO: make these mp_settings
-        self._map_circle_radius = 90
-        self._map_circle_linewidth = 2
+        self._goal_latlon = (None, None)
+        self._goal_pos_enu = (None, None)
+        self._goal_is_valid = False
 
         # *** planner state ***
         # TODO: populate from vehicle params
-        self._turning_radius = self._map_circle_radius
+        self._loiter_radius = 90.0
+        self._loiter_alt_agl = 60.0
         self._climb_angle_rad = 0.15
+        self._turning_radius = self._loiter_radius
         self._max_altitude = 120.0
         self._min_altitude = 50.0
         self._time_budget = 20.0
+
+        # map visuals
+        self._map_circle_radius = self._loiter_radius
+        self._map_circle_linewidth = 2
 
         # TODO: populate from settings
         self._grid_spacing = 30.0
         self._grid_length = 10000.0
 
+        # shared with planner thread
         self._grid_map = None
         self._grid_map_lat = None
         self._grid_map_lon = None
@@ -109,6 +117,8 @@ class TerrainNavModule(mp_module.MPModule):
         self._da_space = None
         self._planner_mgr = None
         self._candidate_path = None
+
+        self.init_terrain_map()
 
     def mavlink_packet(self, m) -> None:
         """
@@ -211,12 +221,30 @@ class TerrainNavModule(mp_module.MPModule):
         (lat, lon) = self.get_map_click_location()
         if lat is None or lon is None:
             return
-
+        
         self._planner_lock.acquire()
-        self._start_location = (lat, lon)
+ 
+        # capture location
+        self._start_latlon = (lat, lon)
+
+        # calculate position (ENU)
+        (east, north) = TerrainNavModule.latlon_to_enu(
+            self._grid_map_lat, self._grid_map_lon, lat, lon
+        )
+
+        # adjust the altitudes above terrain
+        elevation = self._grid_map.atPosition("elevation", (east, north))
+        self._start_pos_enu = [east, north, elevation + self._loiter_alt_agl]
+
+        # check valid
+        self._start_is_valid = TerrainOmplRrt.validatePosition(
+            self._grid_map, self._start_pos_enu, self._turning_radius
+        )
+        colour = (0, 255, 0) if self._start_is_valid else (255, 0, 0)
+
         self._planner_lock.release()
 
-        self.draw_circle(self._map_start_id, lat, lon)
+        self.draw_circle(self._map_start_id, lat, lon, colour)
 
     def set_goal(self):
         (lat, lon) = self.get_map_click_location()
@@ -224,12 +252,30 @@ class TerrainNavModule(mp_module.MPModule):
             return
 
         self._planner_lock.acquire()
-        self._goal_location = (lat, lon)
+
+        # capture location
+        self._goal_latlon = (lat, lon)
+
+        # calculate position (ENU)
+        (east, north) = TerrainNavModule.latlon_to_enu(
+            self._grid_map_lat, self._grid_map_lon, lat, lon
+        )
+
+        # adjust the altitudes above terrain
+        elevation = self._grid_map.atPosition("elevation", (east, north))
+        self._goal_pos_enu = [east, north, elevation + self._loiter_alt_agl]
+
+        # check valid
+        self._goal_is_valid = TerrainOmplRrt.validatePosition(
+            self._grid_map, self._goal_pos_enu, self._turning_radius
+        )
+        colour = (0, 255, 0) if self._goal_is_valid else (255, 0, 0)
+
         self._planner_lock.release()
 
-        self.draw_circle(self._map_goal_id, lat, lon)
+        self.draw_circle(self._map_goal_id, lat, lon, colour)
 
-    def draw_circle(self, id, lat, lon):
+    def draw_circle(self, id, lat, lon, colour):
         # TODO: problem here is the start/goal location may be updated
         #       but not plotted if this fails
         map_module = self.module("map")
@@ -266,8 +312,7 @@ class TerrainNavModule(mp_module.MPModule):
 
         self._map_layer_initialised = False
 
-    def init_planner(self):
-        # NOTE: only called from planner run - no extra lock.
+    def init_terrain_map(self):
 
         # get home position
         wp_module = self.module("wp")
@@ -276,6 +321,8 @@ class TerrainNavModule(mp_module.MPModule):
         home = wp_module.get_home()
         if home is None:
             return
+
+        self._planner_lock.acquire()
 
         self._grid_map_lat = home.x
         self._grid_map_lon = home.y
@@ -286,8 +333,19 @@ class TerrainNavModule(mp_module.MPModule):
         )
         self._grid_map.setGridSpacing(self._grid_spacing)
         self._grid_map.setGridLength(self._grid_length)
+
+        # set up distance layer (too slow in current version)
+        print(f"calculating distance-surface...", end="")
+        # self._grid_map.addLayerDistanceTransform(surface_distance=self._min_altitude)
+        print(f"done.")
+
         self._terrain_map = TerrainMap()
         self._terrain_map.setGridMap(self._grid_map)
+
+        self._planner_lock.release()
+
+    def init_planner(self):
+        # NOTE: only called from planner run - no extra lock.
 
         print(f"Create Dubins state space")
         self._da_space = DubinsAirplaneStateSpace(
@@ -303,78 +361,35 @@ class TerrainNavModule(mp_module.MPModule):
     def run_planner(self):
         # TODO: move to own thread object and implement planner events
         # Run planner on separate thread
+
         def run():
+
             self._planner_lock.acquire()
 
             if self._planner_mgr is None:
                 print("Initialising planner")
                 self.init_planner()
 
-            # calculate start position (ENU)
-            (start_lat, start_lon) = self._start_location
-            if start_lat is None or start_lon is None:
-                print("Planner must have valid start")
+            # check start position is valid
+            if not self._start_is_valid:
+                print(f"Invalid start position: {self._start_pos_enu}")
                 self._planner_lock.release()
                 return
 
-            # TODO: replace with a function
-            # TODO: check round trip: (lat, lon) -> (east, north) -> (lat, lon)
-            distance = mp_util.gps_distance(
-                self._grid_map_lat, self._grid_map_lon, start_lat, start_lon
-            )
-            bearing_deg = mp_util.gps_bearing(
-                self._grid_map_lat, self._grid_map_lon, start_lat, start_lon
-            )
-            bearing_rad = math.radians(bearing_deg)
-            east = distance * math.sin(bearing_rad)
-            north = distance * math.cos(bearing_rad)
-            # TODO: need to supply alt relative to terrain
-            start_pos = [east, north, 60.0]
-
-            # calculate goal position (ENU)
-            (goal_lat, goal_lon) = self._goal_location
-            if goal_lat is None or goal_lon is None:
-                print("Planner must have valid goal")
-
-            # TODO: replace with a function
-            distance = mp_util.gps_distance(
-                self._grid_map_lat, self._grid_map_lon, goal_lat, goal_lon
-            )
-            bearing_deg = mp_util.gps_bearing(
-                self._grid_map_lat, self._grid_map_lon, goal_lat, goal_lon
-            )
-            bearing_rad = math.radians(bearing_deg)
-            east = distance * math.sin(bearing_rad)
-            north = distance * math.cos(bearing_rad)
-            # TODO: need to supply alt relative to terrain
-            goal_pos = [east, north, 60.0]
-
-            # adjust the start and goal altitudes above terrain
-            start_pos[2] += self._grid_map.atPosition("elevation", start_pos)
-            goal_pos[2] += self._grid_map.atPosition("elevation", goal_pos)
-
-            print("Run planner")
-            print(f"start_pos:  {start_pos}")
-            print(f"goal_pos:   {goal_pos}")
-
-            # validate start and goal positions
-            is_start_valid = self._planner_mgr.validatePosition(
-                self._grid_map, start_pos, self._turning_radius
-            )
-            if not is_start_valid:
-                print(f"Invalid start position: {start_pos}")
+            # check goal position is valid
+            if not self._goal_is_valid:
+                print(f"Invalid goal position: {self._start_pos_enu}")
                 self._planner_lock.release()
                 return
-            is_goal_valid = self._planner_mgr.validatePosition(
-                self._grid_map, start_pos, self._turning_radius
-            )
-            if not is_goal_valid:
-                print(f"Invalid goal position: {goal_pos}")
-                self._planner_lock.release()
-                return
+
+            print(f"Run planner")
+            print(f"start_pos_enu:  {self._start_pos_enu}")
+            print(f"goal_pos_enu:   {self._goal_pos_enu}")
 
             # Set up problem and run
-            self._planner_mgr.setupProblem2(start_pos, goal_pos, self._turning_radius)
+            self._planner_mgr.setupProblem2(
+                self._start_pos_enu, self._goal_pos_enu, self._turning_radius
+            )
 
             # Adjust validity checking resolution as needed. This is expressed as
             # a fraction of the spaces extent.
@@ -592,3 +607,12 @@ class TerrainNavModule(mp_module.MPModule):
 
             # tell the wp module to expect some waypoints
             wp_module.loading_waypoints = True
+
+    @staticmethod
+    def latlon_to_enu(origin_lat, origin_lon, lat, lon):
+        distance = mp_util.gps_distance(origin_lat, origin_lon, lat, lon)
+        bearing_deg = mp_util.gps_bearing(origin_lat, origin_lon, lat, lon)
+        bearing_rad = math.radians(bearing_deg)
+        east = distance * math.sin(bearing_rad)
+        north = distance * math.cos(bearing_rad)
+        return (east, north)
