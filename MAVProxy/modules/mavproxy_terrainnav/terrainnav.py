@@ -63,37 +63,20 @@ class TerrainNavModule(mp_module.MPModule):
 
         # threading and multiprocessing
         self._planner_lock = multiproc.Lock()
+        self._planner_thread = None
 
         # start the terrain nav app
         self.app = terrainnav_app.TerrainNavApp(title="Terrain Navigation")
         self.app.start_ui()
 
-        # control update rate to UI
-        self._msg_list = []
+        # ** ui message update settings and state **
         self._fps = 10.0
         self._last_send = 0.0
         self._send_delay = (1.0 / self._fps) * 0.9
+        self._msg_list = []
 
-        # map objects
-        self._map_layer_initialised = False
-        self._map_layer_id = "terrainnav"
-        self._map_start_id = "terrainnav start"
-        self._map_goal_id = "terrainnav goal"
-        self._map_path_id = "terrainnav path"
-        self._map_states_id = "terrainnav states"
-        self._map_boundary_id = "terrainnav boundary"
-
-        # terrain navigation state
-        self._start_latlon = (None, None)
-        self._start_pos_enu = (None, None)
-        self._start_is_valid = False
-
-        self._goal_latlon = (None, None)
-        self._goal_pos_enu = (None, None)
-        self._goal_is_valid = False
-
-        # *** planner state ***
-        # TODO: populate from vehicle params
+        # TODO: populate from vehicle params and sertings
+        # *** planner settings ***
         self._loiter_radius = 90.0
         self._loiter_alt_agl = 60.0
         self._climb_angle_rad = 0.15
@@ -101,18 +84,16 @@ class TerrainNavModule(mp_module.MPModule):
         self._max_altitude = 120.0
         self._min_altitude = 50.0
         self._time_budget = 20.0
-
-        # *** ui state ***
-        self._map_circle_radius = self._loiter_radius
-        self._map_circle_linewidth = 2
-        self._is_boundary_visible = False
-
-
-        # TODO: populate from settings
         self._grid_spacing = 30.0
         self._grid_length = 10000.0
 
-        # shared with planner thread
+        # *** planner state ***
+        self._start_latlon = (None, None)
+        self._start_pos_enu = (None, None)
+        self._start_is_valid = False
+        self._goal_latlon = (None, None)
+        self._goal_pos_enu = (None, None)
+        self._goal_is_valid = False
         self._grid_map = None
         self._grid_map_lat = None
         self._grid_map_lon = None
@@ -120,6 +101,18 @@ class TerrainNavModule(mp_module.MPModule):
         self._da_space = None
         self._planner_mgr = None
         self._candidate_path = None
+
+        # *** slip map state ***
+        self._map_layer_initialised = False
+        self._map_layer_id = "terrainnav"
+        self._map_start_id = "terrainnav start"
+        self._map_goal_id = "terrainnav goal"
+        self._map_path_id = "terrainnav path"
+        self._map_states_id = "terrainnav states"
+        self._map_boundary_id = "terrainnav boundary"
+        self._map_circle_radius = self._loiter_radius
+        self._map_circle_linewidth = 2
+        self._is_boundary_visible = False
 
         self.init_terrain_map()
 
@@ -169,7 +162,7 @@ class TerrainNavModule(mp_module.MPModule):
             elif isinstance(msg, terrainnav_msgs.AddWaypoint):
                 print("Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
-                self.run_planner()
+                self.start_planner_thread()
             elif isinstance(msg, terrainnav_msgs.GenWaypoints):
                 self.gen_waypoints()
             elif isinstance(msg, terrainnav_msgs.Hold):
@@ -229,7 +222,7 @@ class TerrainNavModule(mp_module.MPModule):
 
         self._start_latlon = (lat, lon)
         self.set_start_pos_enu(lat, lon)
-        
+
     def set_start_pos_enu(self, lat, lon):
         if lat is None or lon is None:
             return
@@ -306,7 +299,7 @@ class TerrainNavModule(mp_module.MPModule):
 
     def move_planner_boundary(self):
         """
-        Recentre the terrain map and recalculate. 
+        Recentre the terrain map and recalculate.
         """
         (lat, lon) = self.get_map_click_location()
         if lat is None or lon is None:
@@ -325,7 +318,6 @@ class TerrainNavModule(mp_module.MPModule):
         # redraw boundary
         if self._is_boundary_visible:
             self.show_planner_boundary()
-
 
     def draw_circle(self, id, lat, lon, colour):
         # TODO: problem here is the start/goal location may be updated
@@ -446,75 +438,83 @@ class TerrainNavModule(mp_module.MPModule):
         )
         self._planner_mgr.setBoundsFromMap(self._terrain_map.getGridMap())
 
-    def run_planner(self):
-        # TODO: move to own thread object and implement planner events
-        # Run planner on separate thread
+    def start_planner_thread(self):
+        """
+        Start the planner thread
+        """
+        if self._planner_thread:
+            return
 
-        def run():
-
-            self._planner_lock.acquire()
-
-            if self._planner_mgr is None:
-                print("Initialising planner")
-                self.init_planner()
-
-            # check start position is valid
-            if not self._start_is_valid:
-                print(f"Invalid start position: {self._start_pos_enu}")
-                self._planner_lock.release()
-                return
-
-            # check goal position is valid
-            if not self._goal_is_valid:
-                print(f"Invalid goal position: {self._start_pos_enu}")
-                self._planner_lock.release()
-                return
-
-            print(f"Run planner")
-            print(f"start_pos_enu:  {self._start_pos_enu}")
-            print(f"goal_pos_enu:   {self._goal_pos_enu}")
-
-            # Set up problem and run
-            self._planner_mgr.setupProblem2(
-                self._start_pos_enu, self._goal_pos_enu, self._turning_radius
-            )
-
-            # Adjust validity checking resolution as needed. This is expressed as
-            # a fraction of the spaces extent.
-            problem = self._planner_mgr.getProblemSetup()
-            resolution_m = 100.0
-            resolution_requested = resolution_m / self._grid_length
-            problem.setStateValidityCheckingResolution(resolution_requested)
-            si = problem.getSpaceInformation()
-            resolution_used = si.getStateValidityCheckingResolution()
-            print(f"resolution_used: {resolution_used}")
-
-            self._candidate_path = Path()
-            self._planner_mgr.Solve1(
-                time_budget=self._time_budget, path=self._candidate_path
-            )
-
-            # TODO: also extract the solution state vector, and verify that
-            #       each state vector satisfies the problem bounds.
-            # There may be an issue with the Dubins segments and interpolation of
-            # the segments not honouring the altitude conditions.
-            solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
-            states = solution_path.getStates()
-            self.draw_states(self._map_states_id, states)
-
-            # verify the path is valid
-            position = self._candidate_path.position()
-            if len(position) == 0:
-                print("Failed to solve for trajectory")
-                self._planner_lock.release()
-                return
-
-            self.draw_path(self._map_path_id, self._candidate_path)
-
-            self._planner_lock.release()
-
-        t = threading.Thread(target=run)
+        t = threading.Thread(target=self.run_planner)
+        t.daemon = True
+        self._planner_thread = t
         t.start()
+
+    def run_planner(self):
+        """
+        Planner task run on the planner thread
+        """
+        self._planner_lock.acquire()
+
+        if self._planner_mgr is None:
+            print("Initialising planner")
+            self.init_planner()
+
+        # check start position is valid
+        if not self._start_is_valid:
+            print(f"Invalid start position: {self._start_pos_enu}")
+            self._planner_lock.release()
+            return
+
+        # check goal position is valid
+        if not self._goal_is_valid:
+            print(f"Invalid goal position: {self._start_pos_enu}")
+            self._planner_lock.release()
+            return
+
+        print(f"Run planner")
+        print(f"start_pos_enu:  {self._start_pos_enu}")
+        print(f"goal_pos_enu:   {self._goal_pos_enu}")
+
+        # Set up problem and run
+        self._planner_mgr.setupProblem2(
+            self._start_pos_enu, self._goal_pos_enu, self._turning_radius
+        )
+
+        # Adjust validity checking resolution as needed. This is expressed as
+        # a fraction of the spaces extent.
+        problem = self._planner_mgr.getProblemSetup()
+        resolution_m = 100.0
+        resolution_requested = resolution_m / self._grid_length
+        problem.setStateValidityCheckingResolution(resolution_requested)
+        si = problem.getSpaceInformation()
+        resolution_used = si.getStateValidityCheckingResolution()
+        print(f"resolution_used: {resolution_used}")
+
+        self._candidate_path = Path()
+        self._planner_mgr.Solve1(
+            time_budget=self._time_budget, path=self._candidate_path
+        )
+
+        # TODO: also extract the solution state vector, and verify that
+        #       each state vector satisfies the problem bounds.
+        # There may be an issue with the Dubins segments and interpolation of
+        # the segments not honouring the altitude conditions.
+        solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
+        states = solution_path.getStates()
+        self.draw_states(self._map_states_id, states)
+
+        # verify the path is valid
+        position = self._candidate_path.position()
+        if len(position) == 0:
+            print("Failed to solve for trajectory")
+            self._planner_lock.release()
+            return
+
+        self.draw_path(self._map_path_id, self._candidate_path)
+        self._planner_lock.release()
+
+        self._planner_thread = None
 
     def draw_path(self, id, path):
         # NOTE: only called from planner run - no extra lock.
