@@ -81,6 +81,7 @@ class TerrainNavModule(mp_module.MPModule):
         self._map_goal_id = "terrainnav goal"
         self._map_path_id = "terrainnav path"
         self._map_states_id = "terrainnav states"
+        self._map_boundary_id = "terrainnav boundary"
 
         # terrain navigation state
         self._start_latlon = (None, None)
@@ -101,9 +102,11 @@ class TerrainNavModule(mp_module.MPModule):
         self._min_altitude = 50.0
         self._time_budget = 20.0
 
-        # map visuals
+        # *** ui state ***
         self._map_circle_radius = self._loiter_radius
         self._map_circle_linewidth = 2
+        self._is_boundary_visible = False
+
 
         # TODO: populate from settings
         self._grid_spacing = 30.0
@@ -187,10 +190,12 @@ class TerrainNavModule(mp_module.MPModule):
                 map_module = self.module("map")
                 if map_module is not None:
                     map_module.hide_terrain_contours()
-            elif isinstance(msg, terrainnav_msgs.RemoveContours):
-                map_module = self.module("map")
-                if map_module is not None:
-                    map_module.remove_terrain_contours()
+            elif isinstance(msg, terrainnav_msgs.ShowBoundary):
+                self.show_planner_boundary()
+            elif isinstance(msg, terrainnav_msgs.HideBoundary):
+                self.hide_planner_boundary()
+            elif isinstance(msg, terrainnav_msgs.MoveBoundary):
+                self.move_planner_boundary()
             else:
                 # TODO: raise an exception
                 print("terrainnav: unknown message from UI")
@@ -221,11 +226,15 @@ class TerrainNavModule(mp_module.MPModule):
         (lat, lon) = self.get_map_click_location()
         if lat is None or lon is None:
             return
-        
-        self._planner_lock.acquire()
- 
-        # capture location
+
         self._start_latlon = (lat, lon)
+        self.set_start_pos_enu(lat, lon)
+        
+    def set_start_pos_enu(self, lat, lon):
+        if lat is None or lon is None:
+            return
+
+        self._planner_lock.acquire()
 
         # calculate position (ENU)
         (east, north) = TerrainNavModule.latlon_to_enu(
@@ -251,10 +260,14 @@ class TerrainNavModule(mp_module.MPModule):
         if lat is None or lon is None:
             return
 
-        self._planner_lock.acquire()
-
-        # capture location
         self._goal_latlon = (lat, lon)
+        self.set_goal_pos_enu(lat, lon)
+
+    def set_goal_pos_enu(self, lat, lon):
+        if lat is None or lon is None:
+            return
+
+        self._planner_lock.acquire()
 
         # calculate position (ENU)
         (east, north) = TerrainNavModule.latlon_to_enu(
@@ -274,6 +287,45 @@ class TerrainNavModule(mp_module.MPModule):
         self._planner_lock.release()
 
         self.draw_circle(self._map_goal_id, lat, lon, colour)
+
+    def show_planner_boundary(self):
+        map_module = self.module("map")
+        if map_module is None:
+            return
+
+        self.draw_planner_region()
+        self._is_boundary_visible = True
+
+    def hide_planner_boundary(self):
+        map_module = self.module("map")
+        if map_module is None:
+            return
+
+        map_module.map.remove_object(self._map_boundary_id)
+        self._is_boundary_visible = False
+
+    def move_planner_boundary(self):
+        """
+        Recentre the terrain map and recalculate. 
+        """
+        (lat, lon) = self.get_map_click_location()
+        if lat is None or lon is None:
+            return
+
+        self._grid_map_lat = lat
+        self._grid_map_lon = lon
+
+        # TODO: choose a better name - will be updating the terrain map...
+        self.init_terrain_map()
+
+        # TODO: update the start and end positions in the map ENU frame
+        self.set_start_pos_enu(*self._start_latlon)
+        self.set_goal_pos_enu(*self._goal_latlon)
+
+        # redraw boundary
+        if self._is_boundary_visible:
+            self.show_planner_boundary()
+
 
     def draw_circle(self, id, lat, lon, colour):
         # TODO: problem here is the start/goal location may be updated
@@ -295,6 +347,39 @@ class TerrainNavModule(mp_module.MPModule):
         )
         map_module.map.add_object(slip_circle)
 
+    def draw_planner_region(self):
+        map_module = self.module("map")
+        if map_module is None:
+            return
+
+        if not self._map_layer_initialised:
+            self.init_slip_map_layer()
+
+        map_lat = self._grid_map_lat
+        map_lon = self._grid_map_lon
+        offset = 0.5 * self._grid_length
+
+        # planner region boundary: NE, NW, SW, SE
+        polygon = []
+        polygon.append(mp_util.gps_offset(map_lat, map_lon, offset, offset))
+        polygon.append(mp_util.gps_offset(map_lat, map_lon, -offset, offset))
+        polygon.append(mp_util.gps_offset(map_lat, map_lon, -offset, -offset))
+        polygon.append(mp_util.gps_offset(map_lat, map_lon, offset, -offset))
+        polygon.append(mp_util.gps_offset(map_lat, map_lon, offset, offset))
+
+        if len(polygon) > 1:
+            colour = (0, 255, 255)
+            slip_polygon = mp_slipmap.SlipPolygon(
+                self._map_boundary_id,
+                polygon,
+                layer=self._map_layer_id,
+                linewidth=1,
+                colour=colour,
+                showcircles=False,
+                showlines=True,
+            )
+            map_module.map.add_object(slip_polygon)
+
     def clear_map(self):
         """
         Remove terrain navigation objects from the map.
@@ -308,6 +393,7 @@ class TerrainNavModule(mp_module.MPModule):
         map_module.map.remove_object(self._map_goal_id)
         map_module.map.remove_object(self._map_path_id)
         map_module.map.remove_object(self._map_states_id)
+        map_module.map.remove_object(self._map_boundary_id)
         map_module.map.remove_object(self._map_layer_id)
 
         self._map_layer_initialised = False
@@ -324,8 +410,10 @@ class TerrainNavModule(mp_module.MPModule):
 
         self._planner_lock.acquire()
 
-        self._grid_map_lat = home.x
-        self._grid_map_lon = home.y
+        # set the terrain map origin to home if not set
+        if self._grid_map_lat is None or self._grid_map_lon is None:
+            self._grid_map_lat = home.x
+            self._grid_map_lon = home.y
 
         print(f"Set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}")
         self._grid_map = GridMapSRTM(
@@ -508,7 +596,7 @@ class TerrainNavModule(mp_module.MPModule):
             slip_polygon = mp_slipmap.SlipPolygon(
                 id,
                 polygon,
-                layer=self._map_states_id,
+                layer=self._map_layer_id,
                 linewidth=2,
                 colour=colour,
                 showcircles=True,
