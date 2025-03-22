@@ -42,6 +42,16 @@ class TerrainNavFrame(wx.Frame):
         self._button_gen_waypoints = wx.Button(
             self, id=wx.ID_ANY, label="Gen Waypoints", size=button_size
         )
+        self._button_clear_path = wx.Button(
+            self, id=wx.ID_ANY, label="Clear Path", size=button_size
+        )
+        self._button_clear_waypoints = wx.Button(
+            self, id=wx.ID_ANY, label="Clear Waypoints", size=button_size
+        )
+        self._button_clear_all = wx.Button(
+            self, id=wx.ID_ANY, label="Clear All", size=button_size
+        )
+
         # navigation actions
         self._button_hold = wx.Button(
             self, id=wx.ID_ANY, label="Hold", size=button_size
@@ -88,6 +98,11 @@ class TerrainNavFrame(wx.Frame):
         self._vert_sizer2 = wx.BoxSizer(wx.VERTICAL)
         self._vert_sizer2.Add(self._button_run_planner, proportion=0, flag=wx.EXPAND)
         self._vert_sizer2.Add(self._button_gen_waypoints, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer2.Add(self._button_clear_path, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer2.Add(
+            self._button_clear_waypoints, proportion=0, flag=wx.EXPAND
+        )
+        self._vert_sizer2.Add(self._button_clear_all, proportion=0, flag=wx.EXPAND)
 
         self._vert_sizer3 = wx.BoxSizer(wx.VERTICAL)
         self._vert_sizer3.Add(self._button_hold, proportion=0, flag=wx.EXPAND)
@@ -127,6 +142,11 @@ class TerrainNavFrame(wx.Frame):
         self.Bind(
             wx.EVT_BUTTON, self.on_gen_waypoints_pushed, self._button_gen_waypoints
         )
+        self.Bind(wx.EVT_BUTTON, self.on_clear_path_pushed, self._button_clear_path)
+        self.Bind(
+            wx.EVT_BUTTON, self.on_clear_waypoints_pushed, self._button_clear_waypoints
+        )
+        self.Bind(wx.EVT_BUTTON, self.on_clear_all_pushed, self._button_clear_all)
 
         self.Bind(wx.EVT_BUTTON, self.on_hold_pushed, self._button_hold)
         self.Bind(wx.EVT_BUTTON, self.on_navigate_pushed, self._button_navigate)
@@ -254,4 +274,16 @@ class TerrainNavFrame(wx.Frame):
 
     def on_move_boundary_pushed(self, event):
         msg = terrainnav_msgs.MoveBoundary()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_clear_path_pushed(self, event):
+        msg = terrainnav_msgs.ClearPath()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_clear_waypoints_pushed(self, event):
+        msg = terrainnav_msgs.ClearWaypoints()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_clear_all_pushed(self, event):
+        msg = terrainnav_msgs.ClearAll()
         self._state.ui_pipe_send.send(msg)
