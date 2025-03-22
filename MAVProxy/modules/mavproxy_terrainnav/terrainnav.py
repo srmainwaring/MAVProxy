@@ -559,17 +559,24 @@ class TerrainNavModule(mp_module.MPModule):
             print(f"resolution_used: {resolution_used}")
 
         self._candidate_path = Path()
-        self._planner_mgr.Solve1(
-            time_budget=self._time_budget, path=self._candidate_path
-        )
+
+        try:
+            self._planner_mgr.Solve1(
+                time_budget=self._time_budget, path=self._candidate_path
+            )
+        except RuntimeError as e:
+            print(f"[terrainnav] {e}")
 
         # TODO: also extract the solution state vector, and verify that
         #       each state vector satisfies the problem bounds.
         # There may be an issue with the Dubins segments and interpolation of
         # the segments not honouring the altitude conditions.
-        solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
-        states = solution_path.getStates()
-        self.draw_states(self._map_states_id, states)
+        try:
+            solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
+            states = solution_path.getStates()
+            self.draw_states(self._map_states_id, states)
+        except RuntimeError as e:
+            print(f"[terrainnav] {e}")
 
         # verify the path is valid
         position = self._candidate_path.position()
