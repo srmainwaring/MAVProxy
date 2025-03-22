@@ -32,7 +32,6 @@ class GenWaypoints:
     def __init__(self):
         pass
 
-
 class Hold:
     def __init__(self):
         pass
@@ -78,5 +77,17 @@ class HideBoundary:
         pass
 
 class MoveBoundary:
+    def __init__(self):
+        pass
+
+class ClearAll:
+    def __init__(self):
+        pass
+
+class ClearPath:
+    def __init__(self):
+        pass
+
+class ClearWaypoints:
     def __init__(self):
         pass

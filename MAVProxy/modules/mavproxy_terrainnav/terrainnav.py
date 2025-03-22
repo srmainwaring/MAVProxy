@@ -167,6 +167,12 @@ class TerrainNavModule(mp_module.MPModule):
                 self.start_planner_thread()
             elif isinstance(msg, terrainnav_msgs.GenWaypoints):
                 self.gen_waypoints()
+            elif isinstance(msg, terrainnav_msgs.ClearPath):
+                self.clear_path()
+            elif isinstance(msg, terrainnav_msgs.ClearWaypoints):
+                self.clear_waypoints()
+            elif isinstance(msg, terrainnav_msgs.ClearAll):
+                self.clear_all()
             elif isinstance(msg, terrainnav_msgs.Hold):
                 if self.is_debug:
                     print("Hold")
@@ -388,7 +394,6 @@ class TerrainNavModule(mp_module.MPModule):
         if map_module is None:
             return
 
-        # TODO: check removing unset objects is not an error.
         map_module.map.remove_object(self._map_start_id)
         map_module.map.remove_object(self._map_goal_id)
         map_module.map.remove_object(self._map_path_id)
@@ -397,6 +402,49 @@ class TerrainNavModule(mp_module.MPModule):
         map_module.map.remove_object(self._map_layer_id)
 
         self._map_layer_initialised = False
+
+    def clear_path(self):
+        map_module = self.module("map")
+        if map_module is None:
+            return
+
+        map_module.map.remove_object(self._map_path_id)
+        map_module.map.remove_object(self._map_states_id)
+
+        self._candidate_path = None
+
+    def clear_waypoints(self):
+        # TODO: only remove waypoints created by this module?
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+
+        wp_module.wploader.clear()
+        wp_module.wploader.expected_count = 0
+        self.mpstate.master().waypoint_count_send(0)
+        wp_module.loading_waypoints = True
+
+    def clear_start_goal(self):
+        map_module = self.module("map")
+        if map_module is None:
+            return
+
+        map_module.map.remove_object(self._map_start_id)
+        map_module.map.remove_object(self._map_goal_id)
+
+        self._map_start_id = "terrainnav start"
+        self._map_goal_id = "terrainnav goal"
+        self._start_latlon = (None, None)
+        self._start_pos_enu = (None, None)
+        self._start_is_valid = False
+        self._goal_latlon = (None, None)
+        self._goal_pos_enu = (None, None)
+        self._goal_is_valid = False
+
+    def clear_all(self):
+        self.clear_path()
+        self.clear_waypoints()
+        self.clear_start_goal()
 
     def init_terrain_map(self):
 
