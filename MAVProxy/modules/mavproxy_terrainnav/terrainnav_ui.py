@@ -66,8 +66,16 @@ class TerrainNavFrame(wx.Frame):
         self._button_hide_contours = wx.Button(
             self, id=wx.ID_ANY, label="Hide Contours", size=button_size
         )
-        self._button_remove_contours = wx.Button(
-            self, id=wx.ID_ANY, label="Remove Contours", size=button_size
+
+        # planner boundary (map extents)
+        self._button_show_boundary = wx.Button(
+            self, id=wx.ID_ANY, label="Show Boundary", size=button_size
+        )
+        self._button_hide_boundary = wx.Button(
+            self, id=wx.ID_ANY, label="Hide Boundary", size=button_size
+        )
+        self._button_move_boundary = wx.Button(
+            self, id=wx.ID_ANY, label="Move Boundary", size=button_size
         )
 
         # layout
@@ -91,9 +99,9 @@ class TerrainNavFrame(wx.Frame):
         self._vert_sizer4 = wx.BoxSizer(wx.VERTICAL)
         self._vert_sizer4.Add(self._button_show_contours, proportion=0, flag=wx.EXPAND)
         self._vert_sizer4.Add(self._button_hide_contours, proportion=0, flag=wx.EXPAND)
-        self._vert_sizer4.Add(
-            self._button_remove_contours, proportion=0, flag=wx.EXPAND
-        )
+        self._vert_sizer4.Add(self._button_show_boundary, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer4.Add(self._button_hide_boundary, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer4.Add(self._button_move_boundary, proportion=0, flag=wx.EXPAND)
 
         self._horz_sizer1 = wx.BoxSizer(wx.HORIZONTAL)
         self._horz_sizer1.Add(self._vert_sizer1, proportion=0, flag=wx.EXPAND)
@@ -132,8 +140,15 @@ class TerrainNavFrame(wx.Frame):
         self.Bind(
             wx.EVT_BUTTON, self.on_hide_contours_pushed, self._button_hide_contours
         )
+
         self.Bind(
-            wx.EVT_BUTTON, self.on_remove_contours_pushed, self._button_remove_contours
+            wx.EVT_BUTTON, self.on_show_boundary_pushed, self._button_show_boundary
+        )
+        self.Bind(
+            wx.EVT_BUTTON, self.on_hide_boundary_pushed, self._button_hide_boundary
+        )
+        self.Bind(
+            wx.EVT_BUTTON, self.on_move_boundary_pushed, self._button_move_boundary
         )
 
         # events
@@ -229,6 +244,14 @@ class TerrainNavFrame(wx.Frame):
         msg = terrainnav_msgs.HideContours()
         self._state.ui_pipe_send.send(msg)
 
-    def on_remove_contours_pushed(self, event):
-        msg = terrainnav_msgs.RemoveContours()
+    def on_show_boundary_pushed(self, event):
+        msg = terrainnav_msgs.ShowBoundary()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_hide_boundary_pushed(self, event):
+        msg = terrainnav_msgs.HideBoundary()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_move_boundary_pushed(self, event):
+        msg = terrainnav_msgs.MoveBoundary()
         self._state.ui_pipe_send.send(msg)

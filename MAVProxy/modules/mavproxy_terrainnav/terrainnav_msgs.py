@@ -68,6 +68,15 @@ class HideContours:
         pass
 
 
-class RemoveContours:
+class ShowBoundary:
+    def __init__(self):
+        pass
+
+
+class HideBoundary:
+    def __init__(self):
+        pass
+
+class MoveBoundary:
     def __init__(self):
         pass
