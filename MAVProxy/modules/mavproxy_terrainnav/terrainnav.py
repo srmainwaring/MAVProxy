@@ -158,23 +158,30 @@ class TerrainNavModule(mp_module.MPModule):
             elif isinstance(msg, terrainnav_msgs.SetGoal):
                 self.set_goal()
             elif isinstance(msg, terrainnav_msgs.AddRally):
-                print("Add Rally")
+                if self.is_debug:
+                    print("Add Rally")
             elif isinstance(msg, terrainnav_msgs.AddWaypoint):
-                print("Add Waypoint")
+                if self.is_debug:
+                    print("Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
                 self.start_planner_thread()
             elif isinstance(msg, terrainnav_msgs.GenWaypoints):
                 self.gen_waypoints()
             elif isinstance(msg, terrainnav_msgs.Hold):
-                print("Hold")
+                if self.is_debug:
+                    print("Hold")
             elif isinstance(msg, terrainnav_msgs.Navigate):
-                print("Navigate")
+                if self.is_debug:
+                    print("Navigate")
             elif isinstance(msg, terrainnav_msgs.Rollout):
-                print("Rollout")
+                if self.is_debug:
+                    print("Rollout")
             elif isinstance(msg, terrainnav_msgs.Abort):
-                print("Abort")
+                if self.is_debug:
+                    print("Abort")
             elif isinstance(msg, terrainnav_msgs.Return):
-                print("Return")
+                if self.is_debug:
+                    print("Return")
             elif isinstance(msg, terrainnav_msgs.ShowContours):
                 map_module = self.module("map")
                 if map_module is not None:
@@ -191,7 +198,8 @@ class TerrainNavModule(mp_module.MPModule):
                 self.move_planner_boundary()
             else:
                 # TODO: raise an exception
-                print("terrainnav: unknown message from UI")
+                if self.is_debug:
+                    print("terrainnav: unknown message from UI")
 
     def init_slip_map_layer(self):
         """
@@ -407,7 +415,8 @@ class TerrainNavModule(mp_module.MPModule):
             self._grid_map_lat = home.x
             self._grid_map_lon = home.y
 
-        print(f"Set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}")
+        if self.is_debug:
+            print(f"Set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}")
         self._grid_map = GridMapSRTM(
             map_lat=self._grid_map_lat, map_lon=self._grid_map_lon
         )
@@ -415,9 +424,11 @@ class TerrainNavModule(mp_module.MPModule):
         self._grid_map.setGridLength(self._grid_length)
 
         # set up distance layer (too slow in current version)
-        print(f"calculating distance-surface...", end="")
+        if self.is_debug:
+            print(f"calculating distance-surface...", end="")
         # self._grid_map.addLayerDistanceTransform(surface_distance=self._min_altitude)
-        print(f"done.")
+        if self.is_debug:
+            print(f"done.")
 
         self._terrain_map = TerrainMap()
         self._terrain_map.setGridMap(self._grid_map)
@@ -427,7 +438,8 @@ class TerrainNavModule(mp_module.MPModule):
     def init_planner(self):
         # NOTE: only called from planner run - no extra lock.
 
-        print(f"Create Dubins state space")
+        if self.is_debug:
+            print(f"Create Dubins state space")
         self._da_space = DubinsAirplaneStateSpace(
             turningRadius=self._turning_radius, gam=self._climb_angle_rad
         )
@@ -457,24 +469,28 @@ class TerrainNavModule(mp_module.MPModule):
         self._planner_lock.acquire()
 
         if self._planner_mgr is None:
-            print("Initialising planner")
+            if self.is_debug:
+                print("Initialising planner")
             self.init_planner()
 
         # check start position is valid
         if not self._start_is_valid:
-            print(f"Invalid start position: {self._start_pos_enu}")
+            if self.is_debug:
+                print(f"Invalid start position: {self._start_pos_enu}")
             self._planner_lock.release()
             return
 
         # check goal position is valid
         if not self._goal_is_valid:
-            print(f"Invalid goal position: {self._start_pos_enu}")
+            if self.is_debug:
+                print(f"Invalid goal position: {self._start_pos_enu}")
             self._planner_lock.release()
             return
 
-        print(f"Run planner")
-        print(f"start_pos_enu:  {self._start_pos_enu}")
-        print(f"goal_pos_enu:   {self._goal_pos_enu}")
+        if self.is_debug:
+            print(f"Run planner")
+            print(f"start_pos_enu:  {self._start_pos_enu}")
+            print(f"goal_pos_enu:   {self._goal_pos_enu}")
 
         # Set up problem and run
         self._planner_mgr.setupProblem2(
@@ -489,7 +505,8 @@ class TerrainNavModule(mp_module.MPModule):
         problem.setStateValidityCheckingResolution(resolution_requested)
         si = problem.getSpaceInformation()
         resolution_used = si.getStateValidityCheckingResolution()
-        print(f"resolution_used: {resolution_used}")
+        if self.is_debug:
+            print(f"resolution_used: {resolution_used}")
 
         self._candidate_path = Path()
         self._planner_mgr.Solve1(
@@ -507,7 +524,8 @@ class TerrainNavModule(mp_module.MPModule):
         # verify the path is valid
         position = self._candidate_path.position()
         if len(position) == 0:
-            print("Failed to solve for trajectory")
+            if self.is_debug:
+                print("Failed to solve for trajectory")
             self._planner_lock.release()
             return
 
@@ -585,11 +603,12 @@ class TerrainNavModule(mp_module.MPModule):
                 elevation_model = self.module("terrain").ElevationModel
                 ter_alt = elevation_model.GetElevation(lat, lon)
                 agl_alt = alt - ter_alt
-                print(
-                    f"state: {i}, east: {east:.2f}, north: {north:.2f}, "
-                    f"lat: {lat:.6f}, lon: {lon:.6f}, wp_alt: {alt:.2f}, "
-                    f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
-                )
+                if self.is_debug:
+                    print(
+                        f"state: {i}, east: {east:.2f}, north: {north:.2f}, "
+                        f"lat: {lat:.6f}, lon: {lon:.6f}, wp_alt: {alt:.2f}, "
+                        f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
+                    )
 
         if len(polygon) > 1:
             colour = (255, 0, 0)
@@ -639,10 +658,11 @@ class TerrainNavModule(mp_module.MPModule):
             wp_positions.extend(filtered_positions)
             wp_num = len(filtered_positions)
             wp_num_total += wp_num
-            print(
-                f"segment[{i}]: count: {count}, length: {length:.2f}, dt: {dt:.2f}, "
-                f"wp_num: {wp_num}, wp_num_total: {wp_num_total}, stride: {stride}"
-            )
+            if self.is_debug:
+                print(
+                    f"segment[{i}]: count: {count}, length: {length:.2f}, dt: {dt:.2f}, "
+                    f"wp_num: {wp_num}, wp_num_total: {wp_num_total}, stride: {stride}"
+                )
 
         # prepare waypoints for load
         wp_module.wploader.clear()
@@ -663,11 +683,12 @@ class TerrainNavModule(mp_module.MPModule):
                 elevation_model = self.module("terrain").ElevationModel
                 ter_alt = elevation_model.GetElevation(wp_lat, wp_lon)
                 agl_alt = wp_alt - ter_alt
-                print(
-                    f"wp: {seq}, east: {east:.2f}, north: {north:.2f}, "
-                    f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt: {wp_alt:.2f}, "
-                    f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
-                )
+                if self.is_debug:
+                    print(
+                        f"wp: {seq}, east: {east:.2f}, north: {north:.2f}, "
+                        f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt: {wp_alt:.2f}, "
+                        f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
+                    )
 
             # NOTE: mission_editor.py me_event.MEE_WRITE_WP_NUM
             w = mavutil.mavlink.MAVLink_mission_item_message(
@@ -695,6 +716,10 @@ class TerrainNavModule(mp_module.MPModule):
 
             # tell the wp module to expect some waypoints
             wp_module.loading_waypoints = True
+
+    @property
+    def is_debug(self):
+        return self.mpstate.settings.moddebug > 1
 
     @staticmethod
     def latlon_to_enu(origin_lat, origin_lon, lat, lon):
