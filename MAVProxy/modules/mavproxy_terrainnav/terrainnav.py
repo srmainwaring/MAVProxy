@@ -505,7 +505,7 @@ class TerrainNavModule(mp_module.MPModule):
         if self._planner_thread:
             return
 
-        t = threading.Thread(target=self.run_planner)
+        t = threading.Thread(target=self.run_planner, name="Planner Thread")
         t.daemon = True
         self._planner_thread = t
         t.start()
@@ -526,6 +526,7 @@ class TerrainNavModule(mp_module.MPModule):
             if self.is_debug:
                 print(f"Invalid start position: {self._start_pos_enu}")
             self._planner_lock.release()
+            self._planner_thread = None
             return
 
         # check goal position is valid
@@ -533,6 +534,7 @@ class TerrainNavModule(mp_module.MPModule):
             if self.is_debug:
                 print(f"Invalid goal position: {self._start_pos_enu}")
             self._planner_lock.release()
+            self._planner_thread = None
             return
 
         if self.is_debug:
@@ -575,11 +577,11 @@ class TerrainNavModule(mp_module.MPModule):
             if self.is_debug:
                 print("Failed to solve for trajectory")
             self._planner_lock.release()
+            self._planner_thread = None
             return
 
         self.draw_path(self._map_path_id, self._candidate_path)
         self._planner_lock.release()
-
         self._planner_thread = None
 
     def draw_path(self, id, path):
