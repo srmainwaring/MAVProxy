@@ -57,9 +57,9 @@ class TerrainNavModule(mp_module.MPModule):
             if map_module is not None:
                 map_module.add_menu(menu)
 
-            map_module = self.module("console")
-            if map_module is not None:
-                map_module.add_menu(menu)
+            console_module = self.module("console")
+            if console_module is not None:
+                console_module.add_menu(menu)
 
         # threading and multiprocessing
         self._planner_lock = multiproc.Lock()
