@@ -600,15 +600,22 @@ class TerrainNavModule(mp_module.MPModule):
             self.init_slip_map_layer()
 
         # convert positions [(east, north)] to polygons [(lat, lon)]
+        is_path_valid = True
         polygon = []
         for pos in path.position():
             east = pos.x
             north = pos.y
+            alt = pos.z
             point = mp_util.gps_offset(map_lat, map_lon, east, north)
             polygon.append(point)
 
+            if self.module("terrain") is not None:
+                elevation_model = self.module("terrain").ElevationModel
+                ter_alt = elevation_model.GetElevation(*point)
+                is_path_valid = is_path_valid and alt > ter_alt
+
         if len(polygon) > 1:
-            colour = (0, 0, 255)
+            colour = (0, 255, 0) if is_path_valid else (255, 0, 0)
             slip_polygon = mp_slipmap.SlipPolygon(
                 id,
                 polygon,
@@ -661,7 +668,7 @@ class TerrainNavModule(mp_module.MPModule):
                     )
 
         if len(polygon) > 1:
-            colour = (255, 0, 0)
+            colour = (255, 0, 255)
             slip_polygon = mp_slipmap.SlipPolygon(
                 id,
                 polygon,
