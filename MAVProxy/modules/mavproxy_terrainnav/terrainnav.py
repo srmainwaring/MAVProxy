@@ -538,9 +538,15 @@ class TerrainNavModule(mp_module.MPModule):
             self._start_pos_enu, self._goal_pos_enu, self._turning_radius
         )
 
+        # Update problem
+        problem = self._planner_mgr.getProblemSetup()
+
+        # set fences - must be after problem setup
+        exclusion_polygons_enu = self.get_polyfences_exclusion_polygons_enu()
+        problem.setExclusionPolygons(exclusion_polygons_enu)
+
         # Adjust validity checking resolution as needed. This is expressed as
         # a fraction of the spaces extent.
-        problem = self._planner_mgr.getProblemSetup()
         resolution_m = 100.0
         resolution_requested = resolution_m / self._grid_length
         problem.setStateValidityCheckingResolution(resolution_requested)
@@ -786,3 +792,47 @@ class TerrainNavModule(mp_module.MPModule):
         east = distance * math.sin(bearing_rad)
         north = distance * math.cos(bearing_rad)
         return (east, north)
+
+    def get_polyfences_exclusion_polygons_enu(self):
+        """
+        Get exclusion polygons from the 'fence' module and convert to ENU frame.
+
+        :return: list of exclusion polygons in ENU frame
+        :rtype" list[list[tuple[float, float]]]
+        """
+        # see mavproxy_map.__init__.py
+        #   display_fence
+        #   display_polyfences
+        #   display_polyfences_exclusion_polygons
+        #   display_polyfences_polygons
+
+        # cases to handle
+        # - inclusion circle
+        # - exclusion circle
+        # - inclusion polygon
+        # - exclusion polygon
+
+        # TODO: need to list fences first (at least once, matbe each time?)
+        fence_module = self.module("fence")
+        if fence_module is None:
+            return
+
+        polygons = fence_module.exclusion_polygons()
+        polygons_enu = []
+        for polygon in polygons:
+            points_enu = []
+            for point in polygon:
+                lat = point.x
+                lon = point.y
+                if point.get_type() == "MISSION_ITEM_INT":
+                    lat *= 1e-7
+                    lon *= 1e-7
+                point_enu = TerrainNavModule.latlon_to_enu(
+                    self._grid_map_lat, self._grid_map_lon, lat, lon
+                )
+                points_enu.append(point_enu)
+            polygons_enu.append(points_enu)
+
+        print(f"fences: {polygons_enu}")
+
+        return polygons_enu
