@@ -483,21 +483,6 @@ class TerrainNavModule(mp_module.MPModule):
 
         self._planner_lock.release()
 
-    def init_planner(self):
-        # NOTE: only called from planner run - no extra lock.
-
-        if self.is_debug:
-            print(f"Create Dubins state space")
-        self._da_space = DubinsAirplaneStateSpace(
-            turningRadius=self._turning_radius, gam=self._climb_angle_rad
-        )
-        self._planner_mgr = TerrainOmplRrt(self._da_space)
-        self._planner_mgr.setMap(self._terrain_map)
-        self._planner_mgr.setAltitudeLimits(
-            max_altitude=self._max_altitude, min_altitude=self._min_altitude
-        )
-        self._planner_mgr.setBoundsFromMap(self._terrain_map.getGridMap())
-
     def start_planner_thread(self):
         """
         Start the planner thread
@@ -516,10 +501,16 @@ class TerrainNavModule(mp_module.MPModule):
         """
         self._planner_lock.acquire()
 
-        if self._planner_mgr is None:
-            if self.is_debug:
-                print("Initialising planner")
-            self.init_planner()
+        # recreate planner each run, as parameters may change
+        self._da_space = DubinsAirplaneStateSpace(
+            turningRadius=self._turning_radius, gam=self._climb_angle_rad
+        )
+        self._planner_mgr = TerrainOmplRrt(self._da_space)
+        self._planner_mgr.setMap(self._terrain_map)
+        self._planner_mgr.setAltitudeLimits(
+            max_altitude=self._max_altitude, min_altitude=self._min_altitude
+        )
+        self._planner_mgr.setBoundsFromMap(self._terrain_map.getGridMap())
 
         # check start position is valid
         if not self._start_is_valid:
@@ -566,17 +557,19 @@ class TerrainNavModule(mp_module.MPModule):
             )
         except RuntimeError as e:
             print(f"[terrainnav] {e}")
+            self._planner_lock.release()
+            self._planner_thread = None
+            return
 
-        # TODO: also extract the solution state vector, and verify that
-        #       each state vector satisfies the problem bounds.
-        # There may be an issue with the Dubins segments and interpolation of
-        # the segments not honouring the altitude conditions.
-        try:
-            solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
-            states = solution_path.getStates()
-            self.draw_states(self._map_states_id, states)
-        except RuntimeError as e:
-            print(f"[terrainnav] {e}")
+        # return if no solution
+        if not self._planner_mgr.getProblemSetup().haveSolutionPath():
+            self._planner_lock.release()
+            self._planner_thread = None
+            return
+
+        solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
+        states = solution_path.getStates()
+        self.draw_states(self._map_states_id, states)
 
         # verify the path is valid
         position = self._candidate_path.position()
