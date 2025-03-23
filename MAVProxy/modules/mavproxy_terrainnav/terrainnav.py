@@ -300,7 +300,7 @@ class TerrainNavModule(mp_module.MPModule):
         if map_module is None:
             return
 
-        self.draw_planner_region()
+        self.draw_planner_boundary()
         self._is_boundary_visible = True
 
     def hide_planner_boundary(self):
@@ -353,7 +353,7 @@ class TerrainNavModule(mp_module.MPModule):
         )
         map_module.map.add_object(slip_circle)
 
-    def draw_planner_region(self):
+    def draw_planner_boundary(self):
         map_module = self.module("map")
         if map_module is None:
             return
@@ -371,11 +371,10 @@ class TerrainNavModule(mp_module.MPModule):
         polygon.append(mp_util.gps_offset(map_lat, map_lon, -offset, offset))
         polygon.append(mp_util.gps_offset(map_lat, map_lon, -offset, -offset))
         polygon.append(mp_util.gps_offset(map_lat, map_lon, offset, -offset))
-        polygon.append(mp_util.gps_offset(map_lat, map_lon, offset, offset))
 
         if len(polygon) > 1:
             colour = (0, 255, 255)
-            slip_polygon = mp_slipmap.SlipPolygon(
+            slip_polygon = mp_slipmap.UnclosedSlipPolygon(
                 self._map_boundary_id,
                 polygon,
                 layer=self._map_layer_id,
