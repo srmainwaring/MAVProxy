@@ -326,6 +326,7 @@ class TerrainNavModule(mp_module.MPModule):
 
         # TODO: choose a better name - will be updating the terrain map...
         self.init_terrain_map()
+        self.init_planner()
 
         # TODO: update the start and end positions in the map ENU frame
         self.set_start_pos_enu(*self._start_latlon)
