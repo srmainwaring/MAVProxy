@@ -58,6 +58,25 @@ class TerrainNavModule(mp_module.MPModule):
             ]
         )
 
+        # *** commands ***
+        cmdname = "terrainnav"
+        # TODO: do not support multi-instance or multi-vehicle yet
+        # if self.instance > 1:
+        #     cmdname += "%u" % self.instance
+
+        self.add_command(
+            cmdname,
+            self.cmd_terrainnav,
+            "terrainnav control",
+            [
+                "set (TERRAINNAVSETTING)",
+                "clear",
+            ],
+        )
+        self.add_completion_function(
+            "(TERRAINNAVSETTING)", self.terrainnav_settings.completion
+        )
+
         # add a sub-menu to map and console
         if mp_util.has_wxpython:
             menu = MPMenuSubMenu(
@@ -157,6 +176,43 @@ class TerrainNavModule(mp_module.MPModule):
         """
         self.clear_map()
         self.app.stop_ui()
+
+    def cmd_terrainnav(self, args):
+        """
+        terrainnav commands
+        """
+        usage = "usage: terrainnav <set|clear>"
+        if len(args) < 1:
+            print(usage)
+        elif args[0] == "set":
+            self.cmd_set(args)
+        elif args[0] == "clear":
+            self.cmd_clear(args)
+        else:
+            print(usage)
+
+    def cmd_set(self, args):
+        # TODO: be more selective when to reinitialise
+        self.terrainnav_settings.command(args[1:])
+
+        # TODO: recalc here is called often by auto-complete...
+        if args[1:]:
+            self.init_terrain_map()
+            self.init_planner()
+
+        # update start and goal circles if changed
+        if args[1] == "loiter_radius":
+            self.set_start_pos_enu(*self._start_latlon)
+        elif args[1] == "turning_radius":
+            self.set_goal_pos_enu(*self._goal_latlon)
+
+
+    # TODO: review various `clear_xxx`` options
+    def cmd_clear(self, args):
+        """
+        Clear current plan
+        """
+        self.clear_map()
 
     def process_ui_msgs(self):
         while self.app.parent_pipe_recv.poll():
@@ -266,14 +322,15 @@ class TerrainNavModule(mp_module.MPModule):
         ]
 
         # check valid
+        radius = self.terrainnav_settings.loiter_radius
         self._start_is_valid = self._planner_mgr.validateCircle(
-            self._start_pos_enu, self.terrainnav_settings.loiter_radius
+            self._start_pos_enu, radius
         )
         colour = (0, 255, 0) if self._start_is_valid else (255, 0, 0)
 
         self._planner_lock.release()
 
-        self.draw_circle(self._map_start_id, lat, lon, colour)
+        self.draw_circle(self._map_start_id, lat, lon, radius, colour)
 
     def set_goal(self):
         (lat, lon) = self.get_map_click_location()
@@ -303,14 +360,15 @@ class TerrainNavModule(mp_module.MPModule):
         ]
 
         # check valid
+        radius = self.terrainnav_settings.turning_radius
         self._goal_is_valid = self._planner_mgr.validateCircle(
-            self._goal_pos_enu, self.terrainnav_settings.loiter_radius
+            self._goal_pos_enu, radius
         )
         colour = (0, 255, 0) if self._goal_is_valid else (255, 0, 0)
 
         self._planner_lock.release()
 
-        self.draw_circle(self._map_goal_id, lat, lon, colour)
+        self.draw_circle(self._map_goal_id, lat, lon, radius, colour)
 
     def show_planner_boundary(self):
         map_module = self.module("map")
@@ -351,7 +409,7 @@ class TerrainNavModule(mp_module.MPModule):
         if self._is_boundary_visible:
             self.show_planner_boundary()
 
-    def draw_circle(self, id, lat, lon, colour):
+    def draw_circle(self, id, lat, lon, radius, colour):
         # TODO: issue here is the start/goal location may be updated
         #       but not plotted if this fails
         map_module = self.module("map")
@@ -365,7 +423,7 @@ class TerrainNavModule(mp_module.MPModule):
             key=id,
             layer=self._map_layer_id,
             latlon=(lat, lon),
-            radius=self.terrainnav_settings.loiter_radius,
+            radius=radius,
             color=colour,
             linewidth=self._map_circle_linewidth,
         )
@@ -612,7 +670,7 @@ class TerrainNavModule(mp_module.MPModule):
         self._planner_mgr.setupProblem2(
             self._start_pos_enu,
             self._goal_pos_enu,
-            self.terrainnav_settings.turning_radius,
+            self.terrainnav_settings.loiter_radius,
         )
 
         # run the solver
