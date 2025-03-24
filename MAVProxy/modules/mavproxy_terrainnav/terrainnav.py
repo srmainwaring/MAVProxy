@@ -86,6 +86,7 @@ class TerrainNavModule(mp_module.MPModule):
         self._time_budget = 20.0
         self._grid_spacing = 30.0
         self._grid_length = 10000.0
+        self._validity_checking_resolution_m = 100.0
 
         # *** planner state ***
         self._start_latlon = (None, None)
@@ -115,6 +116,7 @@ class TerrainNavModule(mp_module.MPModule):
         self._is_boundary_visible = False
 
         self.init_terrain_map()
+        self.init_planner()
 
     def mavlink_packet(self, m) -> None:
         """
@@ -253,8 +255,8 @@ class TerrainNavModule(mp_module.MPModule):
         self._start_pos_enu = [east, north, elevation + self._loiter_alt_agl]
 
         # check valid
-        self._start_is_valid = TerrainOmplRrt.validatePosition(
-            self._grid_map, self._start_pos_enu, self._turning_radius
+        self._start_is_valid = self._planner_mgr.validateCircle(
+            self._start_pos_enu, self._turning_radius
         )
         colour = (0, 255, 0) if self._start_is_valid else (255, 0, 0)
 
@@ -286,8 +288,8 @@ class TerrainNavModule(mp_module.MPModule):
         self._goal_pos_enu = [east, north, elevation + self._loiter_alt_agl]
 
         # check valid
-        self._goal_is_valid = TerrainOmplRrt.validatePosition(
-            self._grid_map, self._goal_pos_enu, self._turning_radius
+        self._goal_is_valid = self._planner_mgr.validateCircle(
+            self._goal_pos_enu, self._turning_radius
         )
         colour = (0, 255, 0) if self._goal_is_valid else (255, 0, 0)
 
@@ -334,7 +336,7 @@ class TerrainNavModule(mp_module.MPModule):
             self.show_planner_boundary()
 
     def draw_circle(self, id, lat, lon, colour):
-        # TODO: problem here is the start/goal location may be updated
+        # TODO: issue here is the start/goal location may be updated
         #       but not plotted if this fails
         map_module = self.module("map")
         if map_module is None:
@@ -482,6 +484,73 @@ class TerrainNavModule(mp_module.MPModule):
 
         self._planner_lock.release()
 
+    # TODO: may need to periodically update if internal state changes
+    # =
+    def init_planner(self):
+        """
+        Initialise the planner
+        """
+        # NOTE: initialisation ordering is tricky given current planner mgr
+        # - may need to modify upstream
+        #
+        # - create the state space
+        # - set the map
+        # - set altitude limits
+        # - set bounds
+        # - configureProblem:
+        #   requires:
+        #     - map
+        #     - bounds (altitude limits)
+        #   creates:
+        #     - default planner
+        #     - default objective
+        #     - terrain collision validatity checker
+        #     - planner data
+        # - set start and goal states
+        # - setup problem
+        #   - (re-runs configureProblem internally)
+
+        self._planner_lock.acquire()
+
+        # recreate planner, as inputs may change
+        self._da_space = DubinsAirplaneStateSpace(
+            turningRadius=self._turning_radius, gam=self._climb_angle_rad
+        )
+        self._planner_mgr = TerrainOmplRrt(self._da_space)
+        self._planner_mgr.setMap(self._terrain_map)
+        self._planner_mgr.setAltitudeLimits(
+            max_altitude=self._max_altitude, min_altitude=self._min_altitude
+        )
+        self._planner_mgr.setBoundsFromMap(self._terrain_map.getGridMap())
+
+        # run initial configuration so we can finish setting up fences etc.
+        self._planner_mgr.configureProblem()
+
+        # update problem
+        problem = self._planner_mgr.getProblemSetup()
+
+        # TODO: need to list fences first (at least once, matbe each time?)
+        # set fences - must called be after configureProblem
+        exclusion_polygons_enu = self.get_polyfences_exclusion_polygons_enu()
+        inclusion_polygons_enu = self.get_polyfences_inclusion_polygons_enu()
+        exclusion_circles_enu = self.get_polyfences_exclusion_circles_enu()
+        inclusion_circles_enu = self.get_polyfences_inclusion_circles_enu()
+        problem.setExclusionPolygons(exclusion_polygons_enu)
+        problem.setInclusionPolygons(inclusion_polygons_enu)
+        problem.setExclusionCircles(exclusion_circles_enu)
+        problem.setInclusionCircles(inclusion_circles_enu)
+
+        # adjust validity checking resolution
+        resolution_requested = self._validity_checking_resolution_m / self._grid_length
+        problem.setStateValidityCheckingResolution(resolution_requested)
+
+        if self.is_debug:
+            si = problem.getSpaceInformation()
+            resolution_used = si.getStateValidityCheckingResolution()
+            print(f"resolution_used: {resolution_used}")
+
+        self._planner_lock.release()
+
     def start_planner_thread(self):
         """
         Start the planner thread
@@ -500,29 +569,16 @@ class TerrainNavModule(mp_module.MPModule):
         """
         self._planner_lock.acquire()
 
-        # recreate planner each run, as parameters may change
-        self._da_space = DubinsAirplaneStateSpace(
-            turningRadius=self._turning_radius, gam=self._climb_angle_rad
-        )
-        self._planner_mgr = TerrainOmplRrt(self._da_space)
-        self._planner_mgr.setMap(self._terrain_map)
-        self._planner_mgr.setAltitudeLimits(
-            max_altitude=self._max_altitude, min_altitude=self._min_altitude
-        )
-        self._planner_mgr.setBoundsFromMap(self._terrain_map.getGridMap())
-
         # check start position is valid
         if not self._start_is_valid:
-            if self.is_debug:
-                print(f"Invalid start position: {self._start_pos_enu}")
+            print(f"Invalid start position: {self._start_pos_enu}")
             self._planner_lock.release()
             self._planner_thread = None
             return
 
         # check goal position is valid
         if not self._goal_is_valid:
-            if self.is_debug:
-                print(f"Invalid goal position: {self._start_pos_enu}")
+            print(f"Invalid goal position: {self._start_pos_enu}")
             self._planner_lock.release()
             self._planner_thread = None
             return
@@ -532,38 +588,13 @@ class TerrainNavModule(mp_module.MPModule):
             print(f"start_pos_enu:  {self._start_pos_enu}")
             print(f"goal_pos_enu:   {self._goal_pos_enu}")
 
-        # Set up problem and run
+        # set up problem and run
         self._planner_mgr.setupProblem2(
             self._start_pos_enu, self._goal_pos_enu, self._turning_radius
         )
 
-        # Update problem
-        problem = self._planner_mgr.getProblemSetup()
-
-        # TODO: need to list fences first (at least once, matbe each time?)
-        # TODO: validate start and goal positions using fences 
-        # set fences - must be after problem setup
-        exclusion_polygons_enu = self.get_polyfences_exclusion_polygons_enu()
-        inclusion_polygons_enu = self.get_polyfences_inclusion_polygons_enu()
-        exclusion_circles_enu = self.get_polyfences_exclusion_circles_enu()
-        inclusion_circles_enu = self.get_polyfences_inclusion_circles_enu()
-        problem.setExclusionPolygons(exclusion_polygons_enu)
-        problem.setInclusionPolygons(inclusion_polygons_enu)
-        problem.setExclusionCircles(exclusion_circles_enu)
-        problem.setInclusionCircles(inclusion_circles_enu)
-
-        # Adjust validity checking resolution as needed. This is expressed as
-        # a fraction of the spaces extent.
-        resolution_m = 100.0
-        resolution_requested = resolution_m / self._grid_length
-        problem.setStateValidityCheckingResolution(resolution_requested)
-        si = problem.getSpaceInformation()
-        resolution_used = si.getStateValidityCheckingResolution()
-        if self.is_debug:
-            print(f"resolution_used: {resolution_used}")
-
+        # run the solver
         self._candidate_path = Path()
-
         try:
             self._planner_mgr.Solve1(
                 time_budget=self._time_budget, path=self._candidate_path
@@ -603,7 +634,7 @@ class TerrainNavModule(mp_module.MPModule):
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
 
-        # TODO: problem here is the path may be updated
+        # TODO: issue here is the path may be updated
         #       but not plotted if this fails
         map_module = self.module("map")
         if map_module is None:
@@ -645,7 +676,7 @@ class TerrainNavModule(mp_module.MPModule):
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
 
-        # TODO: problem here is the path may be updated
+        # TODO: issue here is the path may be updated
         #       but not plotted if this fails
         map_module = self.module("map")
         if map_module is None:
@@ -663,9 +694,6 @@ class TerrainNavModule(mp_module.MPModule):
             point = mp_util.gps_offset(map_lat, map_lon, east, north)
             polygon.append(point)
 
-            # TODO: debug checks
-            # NOTE: we are seeing agl_alt < min_alt for the planner which
-            #       indicates a problem.
             if self.module("terrain") is not None:
                 lat = point[0]
                 lon = point[1]
@@ -746,9 +774,6 @@ class TerrainNavModule(mp_module.MPModule):
             wp_alt = pos.z
             (wp_lat, wp_lon) = mp_util.gps_offset(map_lat, map_lon, east, north)
 
-            # TODO: debug checks
-            # NOTE: we are seeing agl_alt < min_alt for the planner which
-            #       indicates a problem.
             if self.module("terrain") is not None:
                 elevation_model = self.module("terrain").ElevationModel
                 ter_alt = elevation_model.GetElevation(wp_lat, wp_lon)
