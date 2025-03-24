@@ -115,6 +115,9 @@ class TerrainNavModule(mp_module.MPModule):
         self._map_circle_linewidth = 2
         self._is_boundary_visible = False
 
+        # *** fence state ***
+        self._fence_change_time = 0
+
         self.init_terrain_map()
         self.init_planner()
 
@@ -123,6 +126,10 @@ class TerrainNavModule(mp_module.MPModule):
         Process a mavlink message.
         """
         mtype = m.get_type()
+
+        # TODO: following mavproxy_map which monitors fence updates in
+        #       mavlink_packet rather than idle_task
+        self.check_reinit_fencepoints()
 
     def idle_task(self) -> None:
         """
@@ -862,7 +869,7 @@ class TerrainNavModule(mp_module.MPModule):
             lon = circle.y
             if circle.get_type() == "MISSION_ITEM_INT":
                 lat *= 1e-7
-                lng *= 1e-7
+                lon *= 1e-7
             (east, north) = TerrainNavModule.latlon_to_enu(
                 origin_lat, origin_lon, lat, lon
             )
@@ -937,3 +944,17 @@ class TerrainNavModule(mp_module.MPModule):
             self._grid_map_lat, self._grid_map_lon, circles
         )
         return circles_enu
+
+    def check_reinit_fencepoints(self):
+        # NOTE: see: mavproxy_map check_redisplay_fencepoints
+        fence_module = self.module('fence')
+        if fence_module is not None:
+            if hasattr(fence_module, 'last_change'):
+                # new fence module
+                last_change = fence_module.last_change()
+            else:
+                # old fence module
+                last_change = fence_module.fenceloader.last_change
+            if self._fence_change_time != last_change:
+                self._fence_change_time = last_change
+                self.init_planner()
