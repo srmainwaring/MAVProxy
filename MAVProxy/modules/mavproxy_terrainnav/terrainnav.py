@@ -41,8 +41,22 @@ class TerrainNavModule(mp_module.MPModule):
     def __init__(self, mpstate: MPState) -> None:
         super().__init__(mpstate, "terrainnav", "terrain navigation module")
 
-        # configure settings
-        # self._terrainnav_settings = mp_settings.MPSetting()
+        # TODO: some of these settings should be extracted from params
+        # *** planner settings ***
+        self.terrainnav_settings = mp_settings.MPSettings(
+            [
+                ("loiter_agl_alt", float, 60.0),
+                ("loiter_radius", float, 90.0),
+                ("turning_radius", float, 90.0),
+                ("climb_angle_deg", float, 8.0),
+                ("max_agl_alt", float, 100.0),
+                ("min_agl_alt", float, 50.0),
+                ("grid_spacing", float, 30.0),
+                ("grid_length", float, 10000.0),
+                ("time_budget", float, 60.0),
+                ("resolution", float, 100.0),
+            ]
+        )
 
         # add a sub-menu to map and console
         if mp_util.has_wxpython:
@@ -69,24 +83,11 @@ class TerrainNavModule(mp_module.MPModule):
         self.app = terrainnav_app.TerrainNavApp(title="Terrain Navigation")
         self.app.start_ui()
 
-        # ** ui message update settings and state **
+        # *** ui message update settings and state ***
         self._fps = 10.0
         self._last_send = 0.0
         self._send_delay = (1.0 / self._fps) * 0.9
         self._msg_list = []
-
-        # TODO: populate from vehicle params and sertings
-        # *** planner settings ***
-        self._loiter_radius = 90.0
-        self._loiter_alt_agl = 60.0
-        self._climb_angle_rad = 0.15
-        self._turning_radius = self._loiter_radius
-        self._max_altitude = 120.0
-        self._min_altitude = 50.0
-        self._time_budget = 20.0
-        self._grid_spacing = 30.0
-        self._grid_length = 10000.0
-        self._validity_checking_resolution_m = 100.0
 
         # *** planner state ***
         self._start_latlon = (None, None)
@@ -111,7 +112,6 @@ class TerrainNavModule(mp_module.MPModule):
         self._map_path_id = "terrainnav path"
         self._map_states_id = "terrainnav states"
         self._map_boundary_id = "terrainnav boundary"
-        self._map_circle_radius = self._loiter_radius
         self._map_circle_linewidth = 2
         self._is_boundary_visible = False
 
@@ -259,11 +259,15 @@ class TerrainNavModule(mp_module.MPModule):
 
         # adjust the altitudes above terrain
         elevation = self._grid_map.atPosition("elevation", (east, north))
-        self._start_pos_enu = [east, north, elevation + self._loiter_alt_agl]
+        self._start_pos_enu = [
+            east,
+            north,
+            elevation + self.terrainnav_settings.loiter_agl_alt,
+        ]
 
         # check valid
         self._start_is_valid = self._planner_mgr.validateCircle(
-            self._start_pos_enu, self._turning_radius
+            self._start_pos_enu, self.terrainnav_settings.loiter_radius
         )
         colour = (0, 255, 0) if self._start_is_valid else (255, 0, 0)
 
@@ -292,11 +296,15 @@ class TerrainNavModule(mp_module.MPModule):
 
         # adjust the altitudes above terrain
         elevation = self._grid_map.atPosition("elevation", (east, north))
-        self._goal_pos_enu = [east, north, elevation + self._loiter_alt_agl]
+        self._goal_pos_enu = [
+            east,
+            north,
+            elevation + self.terrainnav_settings.loiter_agl_alt,
+        ]
 
         # check valid
         self._goal_is_valid = self._planner_mgr.validateCircle(
-            self._goal_pos_enu, self._turning_radius
+            self._goal_pos_enu, self.terrainnav_settings.loiter_radius
         )
         colour = (0, 255, 0) if self._goal_is_valid else (255, 0, 0)
 
@@ -357,7 +365,7 @@ class TerrainNavModule(mp_module.MPModule):
             key=id,
             layer=self._map_layer_id,
             latlon=(lat, lon),
-            radius=self._map_circle_radius,
+            radius=self.terrainnav_settings.loiter_radius,
             color=colour,
             linewidth=self._map_circle_linewidth,
         )
@@ -373,7 +381,7 @@ class TerrainNavModule(mp_module.MPModule):
 
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
-        offset = 0.5 * self._grid_length
+        offset = 0.5 * self.terrainnav_settings.grid_length
 
         # planner region boundary: NE, NW, SW, SE
         polygon = []
@@ -477,13 +485,13 @@ class TerrainNavModule(mp_module.MPModule):
         self._grid_map = GridMapSRTM(
             map_lat=self._grid_map_lat, map_lon=self._grid_map_lon
         )
-        self._grid_map.setGridSpacing(self._grid_spacing)
-        self._grid_map.setGridLength(self._grid_length)
+        self._grid_map.setGridSpacing(self.terrainnav_settings.grid_spacing)
+        self._grid_map.setGridLength(self.terrainnav_settings.grid_length)
 
         # set up distance layer (too slow in current version)
         if self.is_debug:
             print(f"calculating distance-surface...", end="")
-        # self._grid_map.addLayerDistanceTransform(surface_distance=self._min_altitude)
+        # self._grid_map.addLayerDistanceTransform(surface_distance=self.terrainnav_settings.min_agl_alt)
         if self.is_debug:
             print(f"done.")
 
@@ -522,12 +530,14 @@ class TerrainNavModule(mp_module.MPModule):
 
         # recreate planner, as inputs may change
         self._da_space = DubinsAirplaneStateSpace(
-            turningRadius=self._turning_radius, gam=self._climb_angle_rad
+            turningRadius=self.terrainnav_settings.turning_radius,
+            gam=math.radians(self.terrainnav_settings.climb_angle_deg),
         )
         self._planner_mgr = TerrainOmplRrt(self._da_space)
         self._planner_mgr.setMap(self._terrain_map)
         self._planner_mgr.setAltitudeLimits(
-            max_altitude=self._max_altitude, min_altitude=self._min_altitude
+            max_altitude=self.terrainnav_settings.max_agl_alt,
+            min_altitude=self.terrainnav_settings.min_agl_alt,
         )
         self._planner_mgr.setBoundsFromMap(self._terrain_map.getGridMap())
 
@@ -549,7 +559,9 @@ class TerrainNavModule(mp_module.MPModule):
         problem.setInclusionCircles(inclusion_circles_enu)
 
         # adjust validity checking resolution
-        resolution_requested = self._validity_checking_resolution_m / self._grid_length
+        resolution_requested = (
+            self.terrainnav_settings.resolution / self.terrainnav_settings.grid_length
+        )
         problem.setStateValidityCheckingResolution(resolution_requested)
 
         if self.is_debug:
@@ -598,14 +610,17 @@ class TerrainNavModule(mp_module.MPModule):
 
         # set up problem and run
         self._planner_mgr.setupProblem2(
-            self._start_pos_enu, self._goal_pos_enu, self._turning_radius
+            self._start_pos_enu,
+            self._goal_pos_enu,
+            self.terrainnav_settings.turning_radius,
         )
 
         # run the solver
         self._candidate_path = Path()
         try:
             self._planner_mgr.Solve1(
-                time_budget=self._time_budget, path=self._candidate_path
+                time_budget=self.terrainnav_settings.time_budget,
+                path=self._candidate_path,
             )
         except RuntimeError as e:
             print(f"[terrainnav] {e}")
@@ -947,9 +962,9 @@ class TerrainNavModule(mp_module.MPModule):
 
     def check_reinit_fencepoints(self):
         # NOTE: see: mavproxy_map check_redisplay_fencepoints
-        fence_module = self.module('fence')
+        fence_module = self.module("fence")
         if fence_module is not None:
-            if hasattr(fence_module, 'last_change'):
+            if hasattr(fence_module, "last_change"):
                 # new fence module
                 last_change = fence_module.last_change()
             else:
