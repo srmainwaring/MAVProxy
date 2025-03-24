@@ -202,11 +202,11 @@ class TerrainNavModule(mp_module.MPModule):
             self.init_planner()
 
         # update start and goal circles if changed
-        if args[1] == "loiter_radius":
+        if args[1] == "loiter_radius" or args[1] == "loiter_agl_alt":
             self.set_start_pos_enu(*self._start_latlon)
-        elif args[1] == "turning_radius":
+        
+        if args[1] == "turning_radius" or args[1] == "loiter_agl_alt":
             self.set_goal_pos_enu(*self._goal_latlon)
-
 
     # TODO: review various `clear_xxx`` options
     def cmd_clear(self, args):
