@@ -53,7 +53,7 @@ class TerrainNavModule(mp_module.MPModule):
                 ("min_agl_alt", float, 50.0),
                 ("grid_spacing", float, 30.0),
                 ("grid_length", float, 10000.0),
-                ("time_budget", float, 60.0),
+                ("time_budget", float, 20.0),
                 ("resolution", float, 100.0),
             ]
         )
