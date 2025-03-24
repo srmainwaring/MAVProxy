@@ -55,6 +55,7 @@ class TerrainNavModule(mp_module.MPModule):
                 ("grid_length", float, 10000.0),
                 ("time_budget", float, 20.0),
                 ("resolution", float, 100.0),
+                ("wp_spacing", float, 60.0),
             ]
         )
 
@@ -817,9 +818,9 @@ class TerrainNavModule(mp_module.MPModule):
         if wp_module is None:
             return
 
-        # TODO: provide accessors on Path
-        # TODO: dt is not set - fix upstream
-        wp_spacing = 30
+        # TODO: provide accessors on Path  - fix upstream
+        # TODO: dt is not set - fix upstream        
+        wp_spacing = self.terrainnav_settings.wp_spacing
         wp_num_total = 0
         wp_positions = []
         for i, segment in enumerate(path._segments):
