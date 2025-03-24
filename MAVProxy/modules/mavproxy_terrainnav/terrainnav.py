@@ -540,9 +540,17 @@ class TerrainNavModule(mp_module.MPModule):
         # Update problem
         problem = self._planner_mgr.getProblemSetup()
 
+        # TODO: need to list fences first (at least once, matbe each time?)
+        # TODO: validate start and goal positions using fences 
         # set fences - must be after problem setup
         exclusion_polygons_enu = self.get_polyfences_exclusion_polygons_enu()
+        inclusion_polygons_enu = self.get_polyfences_inclusion_polygons_enu()
+        exclusion_circles_enu = self.get_polyfences_exclusion_circles_enu()
+        inclusion_circles_enu = self.get_polyfences_inclusion_circles_enu()
         problem.setExclusionPolygons(exclusion_polygons_enu)
+        problem.setInclusionPolygons(inclusion_polygons_enu)
+        problem.setExclusionCircles(exclusion_circles_enu)
+        problem.setInclusionCircles(inclusion_circles_enu)
 
         # Adjust validity checking resolution as needed. This is expressed as
         # a fraction of the spaces extent.
@@ -792,31 +800,19 @@ class TerrainNavModule(mp_module.MPModule):
         north = distance * math.cos(bearing_rad)
         return (east, north)
 
-    def get_polyfences_exclusion_polygons_enu(self):
+    @staticmethod
+    def polyfences_polygon_to_enu(origin_lat, origin_lon, polygons):
         """
-        Get exclusion polygons from the 'fence' module and convert to ENU frame.
+        Convert polyfences polygones to ENU point polygons.
 
-        :return: list of exclusion polygons in ENU frame
+        :param origin_lat: latitude of the grid map origin
+        :type origin_lat: float
+        :param origin_lon: longitude of the grid map origin
+        :type origin_lon: float
+        :param polygons: list of MAVLink polyfences
+        :return: list of polygons in ENU frame
         :rtype" list[list[tuple[float, float]]]
         """
-        # see mavproxy_map.__init__.py
-        #   display_fence
-        #   display_polyfences
-        #   display_polyfences_exclusion_polygons
-        #   display_polyfences_polygons
-
-        # cases to handle
-        # - inclusion circle
-        # - exclusion circle
-        # - inclusion polygon
-        # - exclusion polygon
-
-        # TODO: need to list fences first (at least once, matbe each time?)
-        fence_module = self.module("fence")
-        if fence_module is None:
-            return
-
-        polygons = fence_module.exclusion_polygons()
         polygons_enu = []
         for polygon in polygons:
             points_enu = []
@@ -827,11 +823,91 @@ class TerrainNavModule(mp_module.MPModule):
                     lat *= 1e-7
                     lon *= 1e-7
                 point_enu = TerrainNavModule.latlon_to_enu(
-                    self._grid_map_lat, self._grid_map_lon, lat, lon
+                    origin_lat, origin_lon, lat, lon
                 )
                 points_enu.append(point_enu)
             polygons_enu.append(points_enu)
-
-        print(f"fences: {polygons_enu}")
-
         return polygons_enu
+
+    def polyfences_circle_to_enu(origin_lat, origin_lon, circles):
+        circles_enu = []
+        for circle in circles:
+            lat = circle.x
+            lon = circle.y
+            if circle.get_type() == "MISSION_ITEM_INT":
+                lat *= 1e-7
+                lng *= 1e-7
+            (east, north) = TerrainNavModule.latlon_to_enu(
+                origin_lat, origin_lon, lat, lon
+            )
+            radius = circle.param1
+            circles_enu.append((east, north, radius))
+        return circles_enu
+
+    def get_polyfences_exclusion_polygons_enu(self):
+        """
+        Get exclusion polygons from the 'fence' module and convert to ENU frame.
+
+        :return: list of polygons in terrain map ENU frame
+        :rtype" list[list[tuple[float, float]]]
+        """
+        fence_module = self.module("fence")
+        if fence_module is None:
+            return
+
+        polygons = fence_module.exclusion_polygons()
+        polygons_enu = TerrainNavModule.polyfences_polygon_to_enu(
+            self._grid_map_lat, self._grid_map_lon, polygons
+        )
+        return polygons_enu
+
+    def get_polyfences_inclusion_polygons_enu(self):
+        """
+        Get inclusion polygons from the 'fence' module and convert to ENU frame.
+
+        :return: list of polygons in terrain map ENU frame
+        :rtype" list[list[tuple[float, float]]]
+        """
+        fence_module = self.module("fence")
+        if fence_module is None:
+            return
+
+        polygons = fence_module.inclusion_polygons()
+        polygons_enu = TerrainNavModule.polyfences_polygon_to_enu(
+            self._grid_map_lat, self._grid_map_lon, polygons
+        )
+        return polygons_enu
+
+    def get_polyfences_exclusion_circles_enu(self):
+        """
+        Get exclusion circles from the 'fence' module and convert to ENU frame.
+
+        :return: list of circles in terrain map ENU frame
+        :rtype" list[list[tuple[float, float]]]
+        """
+        fence_module = self.module("fence")
+        if fence_module is None:
+            return
+
+        circles = fence_module.exclusion_circles()
+        circles_enu = TerrainNavModule.polyfences_circle_to_enu(
+            self._grid_map_lat, self._grid_map_lon, circles
+        )
+        return circles_enu
+
+    def get_polyfences_inclusion_circles_enu(self):
+        """
+        Get inclusion circles from the 'fence' module and convert to ENU frame.
+
+        :return: list of circles in terrain map ENU frame
+        :rtype" list[list[tuple[float, float]]]
+        """
+        fence_module = self.module("fence")
+        if fence_module is None:
+            return
+
+        circles = fence_module.inclusion_circles()
+        circles_enu = TerrainNavModule.polyfences_circle_to_enu(
+            self._grid_map_lat, self._grid_map_lon, circles
+        )
+        return circles_enu
