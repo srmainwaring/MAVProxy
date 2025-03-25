@@ -92,8 +92,8 @@ class TerrainNavModule(mp_module.MPModule):
                 console_module.add_menu(menu)
 
         # threading and multiprocessing
-        self._planner_thread = None
-        self._planner_lock = multiproc.Lock()
+        # self._planner_thread = None
+        # self._planner_lock = multiproc.Lock()
 
         # start the terrain nav app
         self.app = terrainnav_app.TerrainNavApp(title="Terrain Navigation")
@@ -106,18 +106,18 @@ class TerrainNavModule(mp_module.MPModule):
         self._msg_list = []
 
         # *** planner state ***
-        self._start_latlon = (None, None)
-        self._start_pos_enu = (None, None)
-        self._start_is_valid = False
-        self._goal_latlon = (None, None)
-        self._goal_pos_enu = (None, None)
-        self._goal_is_valid = False
-        self._grid_map = None
+        # self._start_latlon = (None, None)
+        # self._start_pos_enu = (None, None)
+        # self._start_is_valid = False
+        # self._goal_latlon = (None, None)
+        # self._goal_pos_enu = (None, None)
+        # self._goal_is_valid = False
+        # self._grid_map = None
         self._grid_map_lat = None
         self._grid_map_lon = None
-        self._terrain_map = None
-        self._da_space = None
-        self._planner_mgr = None
+        # self._terrain_map = None
+        # self._da_space = None
+        # self._planner_mgr = None
         self._candidate_path = None
 
         # *** slip map state ***
@@ -211,7 +211,7 @@ class TerrainNavModule(mp_module.MPModule):
 
         # update start and goal circles if changed
         if args[1] == "loiter_radius":
-            self.set_start_pos_enu(*self._start_latlon)
+            # self.set_start_pos_enu(*self._start_latlon)
 
             # *** multiprocessing ***
             self._parent_pipe_send.send(
@@ -219,7 +219,7 @@ class TerrainNavModule(mp_module.MPModule):
             )
 
         if args[1] == "turning_radius":
-            self.set_goal_pos_enu(*self._goal_latlon)
+            # self.set_goal_pos_enu(*self._goal_latlon)
 
             # *** multiprocessing ***
             self._parent_pipe_send.send(
@@ -227,8 +227,8 @@ class TerrainNavModule(mp_module.MPModule):
             )
 
         if args[1] == "loiter_agl_alt":
-            self.set_start_pos_enu(*self._start_latlon)
-            self.set_goal_pos_enu(*self._goal_latlon)
+            # self.set_start_pos_enu(*self._start_latlon)
+            # self.set_goal_pos_enu(*self._goal_latlon)
 
             # *** multiprocessing ***
             self._parent_pipe_send.send(
@@ -309,25 +309,32 @@ class TerrainNavModule(mp_module.MPModule):
             msg = self._parent_pipe_recv.recv()
 
             if isinstance(msg, PlannerStartLatLon):
-                print(
-                    f"[terrainnav] PlannerStartLatLon: {msg.start_latlon}, "
-                    f"is_valid: {msg.is_valid}"
-                )
+                if self.is_debug:
+                    print(
+                        f"[terrainnav] PlannerStartLatLon: {msg.start_latlon}, "
+                        f"is_valid: {msg.is_valid}"
+                    )
                 (lat, lon) = msg.start_latlon
                 self.draw_start(lat, lon, msg.is_valid)
             elif isinstance(msg, PlannerGoalLatLon):
-                print(
-                    f"[terrainnav] PlannerGoalLatLon: {msg.goal_latlon}, "
-                    f"is_valid: {msg.is_valid}"
-                )
+                if self.is_debug:
+                    print(
+                        f"[terrainnav] PlannerGoalLatLon: {msg.goal_latlon}, "
+                        f"is_valid: {msg.is_valid}"
+                    )
                 (lat, lon) = msg.goal_latlon
                 self.draw_goal(lat, lon, msg.is_valid)
             elif isinstance(msg, PlannerStatus):
-                print(f"[terrainnav] PlannerStatus: {msg.status}")
+                if self.is_debug:
+                    print(f"[terrainnav] PlannerStatus: {msg.status}")
             elif isinstance(msg, PlannerPath):
-                print(f"[terrainnav] PlannerPath: {msg.path}")
+                if self.is_debug:
+                    print(f"[terrainnav] PlannerPath: {msg.path}")
+                self._candidate_path = msg.path
+                self.draw_path(msg.path)
             elif isinstance(msg, PlannerStates):
-                print(f"[terrainnav] PlannerStates: {msg.states}")
+                if self.is_debug:
+                    print(f"[terrainnav] PlannerStates: {msg.states}")
             else:
                 # TODO: raise an exception
                 if self.is_debug:
@@ -360,45 +367,7 @@ class TerrainNavModule(mp_module.MPModule):
         if lat is None or lon is None:
             return
 
-        # TODO: remove - move to multiprocessing
-        # self._start_latlon = (lat, lon)
-        # self.set_start_pos_enu(lat, lon)
-
-        # *** multiprocessing ***
         self._parent_pipe_send.send(PlannerStartLatLon((lat, lon)))
-
-    def set_start_pos_enu(self, lat, lon):
-        # TODO move to multiprocessing
-        return
-
-        if lat is None or lon is None:
-            return
-
-        self._planner_lock.acquire()
-
-        # calculate position (ENU)
-        (east, north) = TerrainNavModule.latlon_to_enu(
-            self._grid_map_lat, self._grid_map_lon, lat, lon
-        )
-
-        # adjust the altitudes above terrain
-        elevation = self._grid_map.atPosition("elevation", (east, north))
-        self._start_pos_enu = [
-            east,
-            north,
-            elevation + self.terrainnav_settings.loiter_agl_alt,
-        ]
-
-        # check valid
-        radius = self.terrainnav_settings.loiter_radius
-        self._start_is_valid = self._planner_mgr.validateCircle(
-            self._start_pos_enu, radius
-        )
-        colour = (0, 255, 0) if self._start_is_valid else (255, 0, 0)
-
-        self._planner_lock.release()
-
-        self.draw_circle(self._map_start_id, lat, lon, radius, colour)
 
     def draw_start(self, lat, lon, is_valid):
         radius = self.terrainnav_settings.loiter_radius
@@ -410,45 +379,7 @@ class TerrainNavModule(mp_module.MPModule):
         if lat is None or lon is None:
             return
 
-        # TODO: remove - move to multiprocessing
-        # self._goal_latlon = (lat, lon)
-        # self.set_goal_pos_enu(lat, lon)
-
-        # *** multiprocessing ***
         self._parent_pipe_send.send(PlannerGoalLatLon((lat, lon)))
-
-    def set_goal_pos_enu(self, lat, lon):
-        # TODO move to multiprocessing
-        return
-
-        if lat is None or lon is None:
-            return
-
-        self._planner_lock.acquire()
-
-        # calculate position (ENU)
-        (east, north) = TerrainNavModule.latlon_to_enu(
-            self._grid_map_lat, self._grid_map_lon, lat, lon
-        )
-
-        # adjust the altitudes above terrain
-        elevation = self._grid_map.atPosition("elevation", (east, north))
-        self._goal_pos_enu = [
-            east,
-            north,
-            elevation + self.terrainnav_settings.loiter_agl_alt,
-        ]
-
-        # check valid
-        radius = self.terrainnav_settings.turning_radius
-        self._goal_is_valid = self._planner_mgr.validateCircle(
-            self._goal_pos_enu, radius
-        )
-        colour = (0, 255, 0) if self._goal_is_valid else (255, 0, 0)
-
-        self._planner_lock.release()
-
-        self.draw_circle(self._map_goal_id, lat, lon, radius, colour)
 
     def draw_goal(self, lat, lon, is_valid):
         radius = self.terrainnav_settings.turning_radius
@@ -483,12 +414,12 @@ class TerrainNavModule(mp_module.MPModule):
         self._grid_map_lon = lon
 
         # TODO: choose a better name - will be updating the terrain map...
-        self.init_terrain_map()
-        self.init_planner()
+        # self.init_terrain_map()
+        # self.init_planner()
 
         # TODO: update the start and end positions in the map ENU frame
-        self.set_start_pos_enu(*self._start_latlon)
-        self.set_goal_pos_enu(*self._goal_latlon)
+        # self.set_start_pos_enu(*self._start_latlon)
+        # self.set_goal_pos_enu(*self._goal_latlon)
 
         # redraw boundary
         if self._is_boundary_visible:
@@ -498,8 +429,6 @@ class TerrainNavModule(mp_module.MPModule):
         self._parent_pipe_send.send(PlannerGridLatLon((lat, lon)))
 
     def draw_circle(self, id, lat, lon, radius, colour):
-        # TODO: issue here is the start/goal location may be updated
-        #       but not plotted if this fails
         map_module = self.module("map")
         if map_module is None:
             return
@@ -594,15 +523,6 @@ class TerrainNavModule(mp_module.MPModule):
 
         map_module.map.remove_object(self._map_start_id)
         map_module.map.remove_object(self._map_goal_id)
-
-        self._map_start_id = "terrainnav start"
-        self._map_goal_id = "terrainnav goal"
-        self._start_latlon = (None, None)
-        self._start_pos_enu = (None, None)
-        self._start_is_valid = False
-        self._goal_latlon = (None, None)
-        self._goal_pos_enu = (None, None)
-        self._goal_is_valid = False
 
     def clear_all(self):
         self.clear_path()
@@ -729,6 +649,9 @@ class TerrainNavModule(mp_module.MPModule):
         """
         Start the planner thread
         """
+        # TODO move to multiprocessing
+        return
+
         if self._planner_thread:
             return
 
@@ -793,7 +716,7 @@ class TerrainNavModule(mp_module.MPModule):
 
         solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
         states = solution_path.getStates()
-        self.draw_states(self._map_states_id, states)
+        self.draw_states(states)
 
         # verify the path is valid
         position = self._candidate_path.position()
@@ -804,11 +727,12 @@ class TerrainNavModule(mp_module.MPModule):
             self._planner_thread = None
             return
 
-        self.draw_path(self._map_path_id, self._candidate_path)
+        self.draw_path(self._candidate_path)
         self._planner_lock.release()
         self._planner_thread = None
 
     # *** multiprocessing ***
+
     def start_planner(self):
         if self.is_planner_alive():
             return
@@ -829,7 +753,7 @@ class TerrainNavModule(mp_module.MPModule):
         )
         self._planner_process.start()
 
-        # TODO: add support for a bulk update
+        # TODO: add support for a batch update
         # send settings
         self._parent_pipe_send.send(
             PlannerLoiterAglAlt(self.terrainnav_settings.loiter_agl_alt)
@@ -862,6 +786,10 @@ class TerrainNavModule(mp_module.MPModule):
             PlannerResolution(self.terrainnav_settings.resolution)
         )
 
+        # TODO: find better way to keep map origin in sync.
+        self._grid_map_lat = home.x
+        self._grid_map_lon = home.y
+
         # send initial grid map position
         self._parent_pipe_send.send(PlannerGridLatLon((home.x, home.y)))
 
@@ -888,14 +816,10 @@ class TerrainNavModule(mp_module.MPModule):
 
     # *** multiprocessing ***
 
-    def draw_path(self, id, path):
-        # NOTE: only called from planner run - no extra lock.
-
+    def draw_path(self, path):
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
 
-        # TODO: issue here is the path may be updated
-        #       but not plotted if this fails
         map_module = self.module("map")
         if map_module is None:
             return
@@ -921,8 +845,8 @@ class TerrainNavModule(mp_module.MPModule):
         if len(polygon) > 1:
             colour = (0, 255, 0) if is_path_valid else (255, 0, 0)
             slip_polygon = mp_slipmap.SlipPolygon(
-                id,
-                polygon,
+                key=self._map_path_id,
+                points=polygon,
                 layer=self._map_layer_id,
                 linewidth=2,
                 colour=colour,
@@ -930,14 +854,10 @@ class TerrainNavModule(mp_module.MPModule):
             )
             map_module.map.add_object(slip_polygon)
 
-    def draw_states(self, id, states):
-        # NOTE: only called from planner run - no extra lock.
-
+    def draw_states(self, states):
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
 
-        # TODO: issue here is the path may be updated
-        #       but not plotted if this fails
         map_module = self.module("map")
         if map_module is None:
             return
@@ -972,8 +892,8 @@ class TerrainNavModule(mp_module.MPModule):
         if len(polygon) > 1:
             colour = (255, 0, 255)
             slip_polygon = mp_slipmap.SlipPolygon(
-                id,
-                polygon,
+                key=self._map_states_id,
+                points=polygon,
                 layer=self._map_layer_id,
                 linewidth=2,
                 colour=colour,
@@ -983,12 +903,9 @@ class TerrainNavModule(mp_module.MPModule):
             map_module.map.add_object(slip_polygon)
 
     def gen_waypoints(self):
-        # copy data shared with planner thread
-        self._planner_lock.acquire()
-        path = copy.deepcopy(self._candidate_path)
-        map_lat = copy.deepcopy(self._grid_map_lat)
-        map_lon = copy.deepcopy(self._grid_map_lon)
-        self._planner_lock.release()
+        path = self._candidate_path
+        map_lat = self._grid_map_lat
+        map_lon = self._grid_map_lon
 
         if path is None or map_lat is None or map_lon is None:
             return
@@ -1433,7 +1350,7 @@ class TerrainPlanner(multiproc.Process):
 
         t = threading.Thread(target=self.process_messages, name="MessageThread")
         t.daemon = True
-        self._planner_thread = t
+        self._message_thread = t
         t.start()
 
     def process_messages(self):
