@@ -249,10 +249,10 @@ class TerrainNavModule(mp_module.MPModule):
                 self.set_goal()
             elif isinstance(msg, terrainnav_msgs.AddRally):
                 if self.is_debug:
-                    print("Add Rally")
+                    print("[terrainnav] Add Rally")
             elif isinstance(msg, terrainnav_msgs.AddWaypoint):
                 if self.is_debug:
-                    print("Add Waypoint")
+                    print("[terrainnav] Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
                 self.start_planner_thread()
 
@@ -269,19 +269,19 @@ class TerrainNavModule(mp_module.MPModule):
                 self.clear_all()
             elif isinstance(msg, terrainnav_msgs.Hold):
                 if self.is_debug:
-                    print("Hold")
+                    print("[terrainnav] Hold")
             elif isinstance(msg, terrainnav_msgs.Navigate):
                 if self.is_debug:
-                    print("Navigate")
+                    print("[terrainnav] Navigate")
             elif isinstance(msg, terrainnav_msgs.Rollout):
                 if self.is_debug:
-                    print("Rollout")
+                    print("[terrainnav] Rollout")
             elif isinstance(msg, terrainnav_msgs.Abort):
                 if self.is_debug:
-                    print("Abort")
+                    print("[terrainnav] Abort")
             elif isinstance(msg, terrainnav_msgs.Return):
                 if self.is_debug:
-                    print("Return")
+                    print("[terrainnav] Return")
             elif isinstance(msg, terrainnav_msgs.ShowContours):
                 map_module = self.module("map")
                 if map_module is not None:
@@ -299,7 +299,7 @@ class TerrainNavModule(mp_module.MPModule):
             else:
                 # TODO: raise an exception
                 if self.is_debug:
-                    print("terrainnav: unknown message from UI")
+                    print("[terrainnav] unknown message from UI")
 
     def init_slip_map_layer(self):
         """
@@ -582,7 +582,7 @@ class TerrainNavModule(mp_module.MPModule):
             self._parent_pipe_send.send(PlannerGridLatLon((home.x, home.y)))
 
         if self.is_debug:
-            print(f"Set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}")
+            print(f"[terrainnav] set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}")
         self._grid_map = GridMapSRTM(
             map_lat=self._grid_map_lat, map_lon=self._grid_map_lon
         )
@@ -591,7 +591,7 @@ class TerrainNavModule(mp_module.MPModule):
 
         # set up distance layer (too slow in current version)
         if self.is_debug:
-            print(f"calculating distance-surface...", end="")
+            print(f"[terrainnav] calculating distance-surface...", end="")
         # self._grid_map.addLayerDistanceTransform(surface_distance=self.terrainnav_settings.min_agl_alt)
         if self.is_debug:
             print(f"done.")
@@ -666,7 +666,7 @@ class TerrainNavModule(mp_module.MPModule):
         if self.is_debug:
             si = problem.getSpaceInformation()
             resolution_used = si.getStateValidityCheckingResolution()
-            print(f"resolution_used: {resolution_used}")
+            print(f"[terrainnav] resolution used: {resolution_used}")
 
         self._planner_lock.release()
 
@@ -690,22 +690,22 @@ class TerrainNavModule(mp_module.MPModule):
 
         # check start position is valid
         if not self._start_is_valid:
-            print(f"Invalid start position: {self._start_pos_enu}")
+            print(f"[terrainnav] invalid start position: {self._start_pos_enu}")
             self._planner_lock.release()
             self._planner_thread = None
             return
 
         # check goal position is valid
         if not self._goal_is_valid:
-            print(f"Invalid goal position: {self._start_pos_enu}")
+            print(f"[terrainnav] invalid goal position: {self._start_pos_enu}")
             self._planner_lock.release()
             self._planner_thread = None
             return
 
         if self.is_debug:
-            print(f"Run planner")
-            print(f"start_pos_enu:  {self._start_pos_enu}")
-            print(f"goal_pos_enu:   {self._goal_pos_enu}")
+            print(f"[terrainnav] run planner")
+            print(f"[terrainnav] start_pos_enu: {self._start_pos_enu}")
+            print(f"[terrainnav] goal_pos_enu: {self._goal_pos_enu}")
 
         # set up problem and run
         self._planner_mgr.setupProblem2(
@@ -741,7 +741,7 @@ class TerrainNavModule(mp_module.MPModule):
         position = self._candidate_path.position()
         if len(position) == 0:
             if self.is_debug:
-                print("Failed to solve for trajectory")
+                print("[terrainnav] failed to solve for trajectory")
             self._planner_lock.release()
             self._planner_thread = None
             return
@@ -806,7 +806,7 @@ class TerrainNavModule(mp_module.MPModule):
         self._planner_process.join(timeout=2.0)
 
         if self.is_planner_alive():
-            print(f"terrainnav: planner process timed out, killing it", file=sys.stderr)
+            print(f"[terrainnav] planner process timed out, killing it", file=sys.stderr)
             self.kill_planner()
 
     def kill_planner(self):
@@ -894,6 +894,7 @@ class TerrainNavModule(mp_module.MPModule):
                 agl_alt = alt - ter_alt
                 if self.is_debug:
                     print(
+                        f"[terrainnav] "
                         f"state: {i}, east: {east:.2f}, north: {north:.2f}, "
                         f"lat: {lat:.6f}, lon: {lon:.6f}, wp_alt: {alt:.2f}, "
                         f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
@@ -949,6 +950,7 @@ class TerrainNavModule(mp_module.MPModule):
             wp_num_total += wp_num
             if self.is_debug:
                 print(
+                    f"[terrainnav] "
                     f"segment[{i}]: count: {count}, length: {length:.2f}, dt: {dt:.2f}, "
                     f"wp_num: {wp_num}, wp_num_total: {wp_num_total}, stride: {stride}"
                 )
@@ -971,6 +973,7 @@ class TerrainNavModule(mp_module.MPModule):
                 agl_alt = wp_alt - ter_alt
                 if self.is_debug:
                     print(
+                        f"[terrainnav] "
                         f"wp: {seq}, east: {east:.2f}, north: {north:.2f}, "
                         f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt: {wp_alt:.2f}, "
                         f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
@@ -1523,7 +1526,7 @@ class TerrainPlanner(multiproc.Process):
 
         # TODO: set up distance layer (too slow in current version)
         # if self.is_debug:
-        #     print(f"calculating distance-surface...", end="")
+        #     print(f"[TerrainPlanner] calculating distance-surface...", end="")
         # self._grid_map.addLayerDistanceTransform(surface_distance=self.terrainnav_settings.min_agl_alt)
         # if self.is_debug:
         #     print(f"done.")
@@ -1580,7 +1583,7 @@ class TerrainPlanner(multiproc.Process):
         # if self.is_debug:
         #     si = problem.getSpaceInformation()
         #     resolution_used = si.getStateValidityCheckingResolution()
-        #     print(f"resolution used: {resolution_used}")
+        #     print(f"[TerrainPlanner] resolution used: {resolution_used}")
 
         self._lock.release()
 
