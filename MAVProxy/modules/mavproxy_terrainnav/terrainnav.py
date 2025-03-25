@@ -4,6 +4,7 @@ Terrain navigation module
 
 import copy
 import math
+import sys
 import time
 import threading
 
@@ -46,8 +47,8 @@ class TerrainNavModule(mp_module.MPModule):
         self.terrainnav_settings = mp_settings.MPSettings(
             [
                 ("loiter_agl_alt", float, 60.0),
-                ("loiter_radius", float, 90.0),
-                ("turning_radius", float, 90.0),
+                ("loiter_radius", float, 60.0),
+                ("turning_radius", float, 60.0),
                 ("climb_angle_deg", float, 8.0),
                 ("max_agl_alt", float, 100.0),
                 ("min_agl_alt", float, 50.0),
@@ -96,8 +97,8 @@ class TerrainNavModule(mp_module.MPModule):
                 console_module.add_menu(menu)
 
         # threading and multiprocessing
-        self._planner_lock = multiproc.Lock()
         self._planner_thread = None
+        self._planner_lock = multiproc.Lock()
 
         # start the terrain nav app
         self.app = terrainnav_app.TerrainNavApp(title="Terrain Navigation")
@@ -138,8 +139,16 @@ class TerrainNavModule(mp_module.MPModule):
         # *** fence state ***
         self._fence_change_time = 0
 
+        # *** multiprocessing ***
+        self._planner_process = None
+        self._parent_pipe_recv, self._planner_pipe_send = multiproc.Pipe(duplex=False)
+        self._planner_pipe_recv, self._parent_pipe_send = multiproc.Pipe(duplex=False)
+        self._planner_close_event = multiproc.Event()
+        self._planner_close_event.clear()
+
         self.init_terrain_map()
         self.init_planner()
+        self.start_planner()
 
     def mavlink_packet(self, m) -> None:
         """
@@ -177,6 +186,7 @@ class TerrainNavModule(mp_module.MPModule):
         """
         self.clear_map()
         self.app.stop_ui()
+        self.stop_planner()
 
     def cmd_terrainnav(self, args):
         """
@@ -202,11 +212,30 @@ class TerrainNavModule(mp_module.MPModule):
             self.init_planner()
 
         # update start and goal circles if changed
-        if args[1] == "loiter_radius" or args[1] == "loiter_agl_alt":
+        if args[1] == "loiter_radius":
             self.set_start_pos_enu(*self._start_latlon)
-        
-        if args[1] == "turning_radius" or args[1] == "loiter_agl_alt":
+
+            # *** multiprocessing ***
+            self._parent_pipe_send.send(
+                PlannerLoiterRadius(self.terrainnav_settings.loiter_radius)
+            )
+
+        if args[1] == "turning_radius":
             self.set_goal_pos_enu(*self._goal_latlon)
+
+            # *** multiprocessing ***
+            self._parent_pipe_send.send(
+                PlannerTurningRadius(self.terrainnav_settings.turning_radius)
+            )
+
+        if args[1] == "loiter_agl_alt":
+            self.set_start_pos_enu(*self._start_latlon)
+            self.set_goal_pos_enu(*self._goal_latlon)
+
+            # *** multiprocessing ***
+            self._parent_pipe_send.send(
+                PlannerLoiterAglAlt(self.terrainnav_settings.loiter_agl_alt)
+            )
 
     # TODO: review various `clear_xxx`` options
     def cmd_clear(self, args):
@@ -231,6 +260,10 @@ class TerrainNavModule(mp_module.MPModule):
                     print("Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
                 self.start_planner_thread()
+
+                # *** multiprocessing ***
+                self._parent_pipe_send.send(PlannerCmdRunPlanner())
+
             elif isinstance(msg, terrainnav_msgs.GenWaypoints):
                 self.gen_waypoints()
             elif isinstance(msg, terrainnav_msgs.ClearPath):
@@ -303,6 +336,11 @@ class TerrainNavModule(mp_module.MPModule):
         self._start_latlon = (lat, lon)
         self.set_start_pos_enu(lat, lon)
 
+        # *** multiprocessing ***
+        self._planner_lock.acquire()
+        self._parent_pipe_send.send(PlannerStartLatLon((lat, lon)))
+        self._planner_lock.release()
+
     def set_start_pos_enu(self, lat, lon):
         if lat is None or lon is None:
             return
@@ -340,6 +378,9 @@ class TerrainNavModule(mp_module.MPModule):
 
         self._goal_latlon = (lat, lon)
         self.set_goal_pos_enu(lat, lon)
+
+        # *** multiprocessing ***
+        self._parent_pipe_send.send(PlannerGoalLatLon((lat, lon)))
 
     def set_goal_pos_enu(self, lat, lon):
         if lat is None or lon is None:
@@ -409,6 +450,9 @@ class TerrainNavModule(mp_module.MPModule):
         # redraw boundary
         if self._is_boundary_visible:
             self.show_planner_boundary()
+
+        # *** multiprocessing ***
+        self._parent_pipe_send.send(PlannerGridLatLon((lat, lon)))
 
     def draw_circle(self, id, lat, lon, radius, colour):
         # TODO: issue here is the start/goal location may be updated
@@ -539,6 +583,9 @@ class TerrainNavModule(mp_module.MPModule):
             self._grid_map_lat = home.x
             self._grid_map_lon = home.y
 
+            # *** multiprocessing ***
+            self._parent_pipe_send.send(PlannerGridLatLon((home.x, home.y)))
+
         if self.is_debug:
             print(f"Set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}")
         self._grid_map = GridMapSRTM(
@@ -559,8 +606,6 @@ class TerrainNavModule(mp_module.MPModule):
 
         self._planner_lock.release()
 
-    # TODO: may need to periodically update if internal state changes
-    # =
     def init_planner(self):
         """
         Initialise the planner
@@ -637,7 +682,7 @@ class TerrainNavModule(mp_module.MPModule):
         if self._planner_thread:
             return
 
-        t = threading.Thread(target=self.run_planner, name="Planner Thread")
+        t = threading.Thread(target=self.run_planner, name="PlannerThread")
         t.daemon = True
         self._planner_thread = t
         t.start()
@@ -709,6 +754,75 @@ class TerrainNavModule(mp_module.MPModule):
         self.draw_path(self._map_path_id, self._candidate_path)
         self._planner_lock.release()
         self._planner_thread = None
+
+    # *** multiprocessing ***
+    def start_planner(self):
+        if self.is_planner_alive():
+            return
+
+        # TODO: pass initial settings as argument to the planner (dict)?
+        self._planner_process = TerrainPlanner(
+            self._planner_pipe_send,
+            self._planner_pipe_recv,
+            self._planner_close_event,
+        )
+        self._planner_process.start()
+
+        # TODO: add support for a bulk update
+        # send settings
+        self._parent_pipe_send.send(
+            PlannerLoiterAglAlt(self.terrainnav_settings.loiter_agl_alt)
+        )
+        self._parent_pipe_send.send(
+            PlannerLoiterRadius(self.terrainnav_settings.loiter_radius)
+        )
+        self._parent_pipe_send.send(
+            PlannerTurningRadius(self.terrainnav_settings.turning_radius)
+        )
+        self._parent_pipe_send.send(
+            PlannerClimbAngleDeg(self.terrainnav_settings.climb_angle_deg)
+        )
+        self._parent_pipe_send.send(
+            PlannerMaxAglAlt(self.terrainnav_settings.max_agl_alt)
+        )
+        self._parent_pipe_send.send(
+            PlannerMinAglAlt(self.terrainnav_settings.min_agl_alt)
+        )
+        self._parent_pipe_send.send(
+            PlannerGridSpacing(self.terrainnav_settings.grid_spacing)
+        )
+        self._parent_pipe_send.send(
+            PlannerGridLength(self.terrainnav_settings.grid_length)
+        )
+        self._parent_pipe_send.send(
+            PlannerTimeBudget(self.terrainnav_settings.time_budget)
+        )
+        self._parent_pipe_send.send(
+            PlannerResolution(self.terrainnav_settings.resolution)
+        )
+
+        # TODO: send initial grid map position
+
+    def stop_planner(self):
+        if not self.is_planner_alive():
+            return
+
+        self._planner_close_event.set()
+        self._planner_process.join(timeout=2.0)
+
+        if self.is_planner_alive():
+            print(f"terrainnav: planner process timed out, killing it", file=sys.stderr)
+            self.kill_planner()
+
+    def kill_planner(self):
+        self._planner_process.terminate()
+        self._parent_pipe_recv, self._planner_pipe_send = multiproc.Pipe(duplex=False)
+        self._planner_pipe_recv, self._parent_pipe_send = multiproc.Pipe(duplex=False)
+
+    def is_planner_alive(self):
+        return self._planner_process is not None and self._planner_process.is_alive()
+
+    # *** multiprocessing ***
 
     def draw_path(self, id, path):
         # NOTE: only called from planner run - no extra lock.
@@ -819,7 +933,7 @@ class TerrainNavModule(mp_module.MPModule):
             return
 
         # TODO: provide accessors on Path  - fix upstream
-        # TODO: dt is not set - fix upstream        
+        # TODO: dt is not set - fix upstream
         wp_spacing = self.terrainnav_settings.wp_spacing
         wp_num_total = 0
         wp_positions = []
@@ -1032,3 +1146,567 @@ class TerrainNavModule(mp_module.MPModule):
             if self._fence_change_time != last_change:
                 self._fence_change_time = last_change
                 self.init_planner()
+
+
+# data messages [in]
+
+
+class PlannerStartLatLon:
+    def __init__(self, start_latlon):
+        self.start_latlon = start_latlon
+
+
+class PlannerGoalLatLon:
+    def __init__(self, goal_latlon):
+        self.goal_latlon = goal_latlon
+
+
+class PlannerLoiterAglAlt:
+    def __init__(self, loiter_agl_alt):
+        self.loiter_agl_alt = loiter_agl_alt
+
+
+class PlannerLoiterRadius:
+    def __init__(self, loiter_radius):
+        self.loiter_radius = loiter_radius
+
+
+class PlannerTurningRadius:
+    def __init__(self, turning_radius):
+        self.turning_radius = turning_radius
+
+
+class PlannerClimbAngleDeg:
+    def __init__(self, climb_angle_deg):
+        self.climb_angle_deg = climb_angle_deg
+
+
+class PlannerMaxAglAlt:
+    def __init__(self, max_agl_alt):
+        self.max_agl_alt = max_agl_alt
+
+
+class PlannerMinAglAlt:
+    def __init__(self, min_agl_alt):
+        self.min_agl_alt = min_agl_alt
+
+
+class PlannerGridLatLon:
+    def __init__(self, grid_latlon):
+        self.grid_latlon = grid_latlon
+
+
+class PlannerGridSpacing:
+    def __init__(self, grid_spacing):
+        self.grid_spacing = grid_spacing
+
+
+class PlannerGridLength:
+    def __init__(self, grid_length):
+        self.grid_length = grid_length
+
+
+class PlannerTimeBudget:
+    def __init__(self, time_budget):
+        self.time_budget = time_budget
+
+
+class PlannerResolution:
+    def __init__(self, resolution):
+        self.resolution = resolution
+
+
+# data messages [out]
+
+
+class PlannerStatus:
+    def __init__(self, status):
+        self.status = status
+
+
+class PlannerPath:
+    def __init__(self, path):
+        self.path = path
+
+
+class PlannerStates:
+    def __init__(self, states):
+        self.states = states
+
+
+# command messages
+
+
+class PlannerCmdRunPlanner:
+    def __init__(self):
+        pass
+
+
+class TerrainPlanner(multiproc.Process):
+    def __init__(self, pipe_send, pipe_recv, close_event):
+        super().__init__(name="TerrainPlanner", daemon=True)
+
+        self._pipe_send = pipe_send
+        self._pipe_recv = pipe_recv
+        self._close_event = close_event
+
+        # thread to process incoming messages
+        self._message_thread = None
+        self._lock = multiproc.Lock()
+
+        # *** process state ***
+        self._do_init_terrain_map = False
+        self._do_init_planner = False
+        self._do_update_start_pos = False
+        self._do_update_goal_pos = False
+        self._do_run_planner = False
+
+        # *** planner settings ***
+        self._loiter_agl_alt = 60.0
+        self._loiter_radius = 60.0
+        self._turning_radius = 60.0
+        self._climb_angle_deg = 8.0
+        self._max_agl_alt = 100.0
+        self._min_agl_alt = 50.0
+        self._grid_spacing = 30.0
+        self._grid_length = 10000.0
+        self._time_budget = 20.0
+        self._resolution = 100.0
+
+        # *** planner state ***
+        self._start_latlon = (None, None)
+        self._start_pos_enu = (None, None)
+        self._start_is_valid = False
+        self._goal_latlon = (None, None)
+        self._goal_pos_enu = (None, None)
+        self._goal_is_valid = False
+        self._grid_map = None
+        self._grid_map_lat = None
+        self._grid_map_lon = None
+        self._terrain_map = None
+        self._da_space = None
+        self._planner_mgr = None
+
+    def run(self):
+        # start threads
+        self.start_message_thread()
+
+        # monitor events
+        while True:
+            # check for close event
+            if self._close_event.is_set():
+                print(f"[TerrainPlanner] closing")
+                break
+
+            try:
+                # copy shared state
+                self._lock.acquire()
+                do_init_terrain_map = self._do_init_terrain_map
+                do_init_planner = self._do_init_planner
+                do_update_start_pos = self._do_update_start_pos
+                do_update_goal_pos = self._do_update_goal_pos
+                do_run_planner = self._do_run_planner
+                self._lock.release()
+
+                # run planner operations
+                if do_init_terrain_map:
+                    self.init_terrain_map()
+
+                    self._lock.acquire()
+                    self._do_init_terrain_map = False
+                    self._lock.release()
+
+                if do_init_planner:
+                    self.init_planner()
+
+                    self._lock.acquire()
+                    self._do_init_planner = False
+                    self._lock.release()
+
+                if do_update_start_pos:
+                    self._lock.acquire()
+                    (lat, lon) = self._start_latlon
+                    self._lock.release()
+
+                    self.set_start_pos_enu(lat, lon)
+
+                    self._lock.acquire()
+                    self._do_update_start_pos = False
+                    self._lock.release()
+
+                if do_update_goal_pos:
+                    self._lock.acquire()
+                    (lat, lon) = self._goal_latlon
+                    self._lock.release()
+
+                    self.set_goal_pos_enu(lat, lon)
+
+                    self._lock.acquire()
+                    self._do_update_goal_pos = False
+                    self._lock.release()
+
+                if do_run_planner:
+                    self.run_planner()
+
+                    self._lock.acquire()
+                    self._do_run_planner = False
+                    self._lock.release()
+
+            except Exception as e:
+                print(f"[TerrainPlanner] exception in main loop: {e}")
+                break
+
+            time.sleep(0.01)
+
+    def start_message_thread(self):
+        if self._message_thread:
+            return
+
+        t = threading.Thread(target=self.process_messages, name="MessageThread")
+        t.daemon = True
+        self._planner_thread = t
+        t.start()
+
+    def process_messages(self):
+        """
+        Process incoming messages
+        """
+        while True:
+            # receive data from parent process
+            while self._pipe_recv.poll():
+                msg = self._pipe_recv.recv()
+
+                if isinstance(msg, PlannerStartLatLon):
+                    self.on_start_lat_lon(msg)
+                elif isinstance(msg, PlannerGoalLatLon):
+                    self.on_goal_lat_lon(msg)
+                elif isinstance(msg, PlannerLoiterAglAlt):
+                    self.on_loiter_agl_alt(msg)
+                elif isinstance(msg, PlannerLoiterRadius):
+                    self.on_loiter_radius(msg)
+                elif isinstance(msg, PlannerTurningRadius):
+                    self.on_turning_radius(msg)
+                elif isinstance(msg, PlannerClimbAngleDeg):
+                    self.on_climb_angle_deg(msg)
+                elif isinstance(msg, PlannerMaxAglAlt):
+                    self.on_max_agl_alt(msg)
+                elif isinstance(msg, PlannerMinAglAlt):
+                    self.on_min_agl_alt(msg)
+                elif isinstance(msg, PlannerGridLatLon):
+                    self.on_grid_latlon(msg)
+                elif isinstance(msg, PlannerGridSpacing):
+                    self.on_grid_spacing(msg)
+                elif isinstance(msg, PlannerGridLength):
+                    self.on_grid_length(msg)
+                elif isinstance(msg, PlannerTimeBudget):
+                    self.on_time_budget(msg)
+                elif isinstance(msg, PlannerResolution):
+                    self.on_resolution(msg)
+                elif isinstance(msg, PlannerCmdRunPlanner):
+                    self.on_cmd_run_planner(msg)
+
+            # update at 100 Hz
+            time.sleep(0.01)
+
+    def on_start_lat_lon(self, msg):
+        print(f"[TerrainPlanner] PlannerStartLatLon: {msg.start_latlon}")
+        self._lock.acquire()
+        self._start_latlon = msg.start_latlon
+        self._do_update_start_pos = True
+        self._lock.release()
+
+    def on_goal_lat_lon(self, msg):
+        print(f"[TerrainPlanner] PlannerGoalLatLon: {msg.goal_latlon}")
+        self._lock.acquire()
+        self._goal_latlon = msg.goal_latlon
+        self._do_update_goal_pos = True
+        self._lock.release()
+
+    def on_loiter_agl_alt(self, msg):
+        print(f"[TerrainPlanner] PlannerLoiterAglAlt: {msg.loiter_agl_alt}")
+        self._lock.acquire()
+        self._loiter_agl_alt = msg.loiter_agl_alt
+        self._do_update_start_pos = True
+        self._do_update_goal_pos = True
+        self._lock.release()
+
+    def on_loiter_radius(self, msg):
+        print(f"[TerrainPlanner] PlannerLoiterRadius: {msg.loiter_radius}")
+        self._lock.acquire()
+        self._loiter_radius = msg.loiter_radius
+        self._do_init_planner = True
+        self._do_update_start_pos = True
+        self._lock.release()
+        # TODO: recalculate start and goal positions
+
+    def on_turning_radius(self, msg):
+        print(f"[TerrainPlanner] PlannerTurningRadius: {msg.turning_radius}")
+        self._lock.acquire()
+        self._turning_radius = msg.turning_radius
+        self._do_init_planner = True
+        self._do_update_goal_pos = True
+        self._lock.release()
+
+    def on_climb_angle_deg(self, msg):
+        print(f"[TerrainPlanner] PlannerClimbAngleDeg: {msg.climb_angle_deg}")
+        self._lock.acquire()
+        self._climb_angle_deg = msg.climb_angle_deg
+        self._do_init_planner = True
+        self._lock.release()
+
+    def on_max_agl_alt(self, msg):
+        print(f"[TerrainPlanner] PlannerMaxAglAlt: {msg.max_agl_alt}")
+        self._lock.acquire()
+        self._max_agl_alt = msg.max_agl_alt
+        self._do_init_planner = True
+        self._lock.release()
+
+    def on_min_agl_alt(self, msg):
+        print(f"[TerrainPlanner] PlannerMinAglAlt: {msg.min_agl_alt}")
+        self._lock.acquire()
+        self._min_agl_alt = msg.min_agl_alt
+        self._do_init_planner = True
+        self._lock.release()
+
+    def on_grid_latlon(self, msg):
+        print(f"[TerrainPlanner] PlannerGridLatLon: {msg.grid_latlon}")
+        self._lock.acquire()
+        self._grid_map_lat = msg.grid_latlon[0]
+        self._grid_map_lon = msg.grid_latlon[1]
+        self._do_init_terrain_map = True
+        self._do_init_planner = True
+        self._do_update_start_pos = True
+        self._do_update_goal_pos = True
+        self._lock.release()
+
+    def on_grid_spacing(self, msg):
+        print(f"[TerrainPlanner] PlannerGridSpacing: {msg.grid_spacing}")
+        self._lock.acquire()
+        self._grid_spacing = msg.grid_spacing
+        self._do_init_terrain_map = True
+        self._do_init_planner = True
+        self._lock.release()
+
+    def on_grid_length(self, msg):
+        print(f"[TerrainPlanner] PlannerGridLength: {msg.grid_length}")
+        self._lock.acquire()
+        self._grid_length = msg.grid_length
+        self._do_init_terrain_map = True
+        self._do_init_planner = True
+        self._lock.release()
+
+    def on_time_budget(self, msg):
+        print(f"[TerrainPlanner] PlannerTimeBudget: {msg.time_budget}")
+        self._lock.acquire()
+        self._time_budget = msg.time_budget
+        self._lock.release()
+
+    def on_resolution(self, msg):
+        print(f"[TerrainPlanner] PlannerResolution: {msg.resolution}")
+        self._lock.acquire()
+        self._resolution = msg.resolution
+        self._do_init_planner = True
+        self._lock.release()
+
+    def on_cmd_run_planner(self, msg):
+        print(f"[TerrainPlanner] PlannerCmdRunPlanner:")
+        self._lock.acquire()
+        self._do_run_planner = True
+        self._lock.release()
+
+    def init_terrain_map(self):
+        if not self.have_gridmap_latlon():
+            return
+
+        self._lock.acquire()
+
+        self._grid_map = GridMapSRTM(
+            map_lat=self._grid_map_lat, map_lon=self._grid_map_lon
+        )
+        self._grid_map.setGridSpacing(self._grid_spacing)
+        self._grid_map.setGridLength(self._grid_length)
+
+        # TODO: set up distance layer (too slow in current version)
+        # if self.is_debug:
+        #     print(f"calculating distance-surface...", end="")
+        # self._grid_map.addLayerDistanceTransform(surface_distance=self.terrainnav_settings.min_agl_alt)
+        # if self.is_debug:
+        #     print(f"done.")
+
+        self._terrain_map = TerrainMap()
+        self._terrain_map.setGridMap(self._grid_map)
+
+        self._lock.release()
+
+    def init_planner(self):
+        self._lock.acquire()
+
+        # check the terrain map has been initialised
+        if self._terrain_map is None:
+            self._lock.release()
+            return
+
+        # recreate planner, as inputs may change
+        self._da_space = DubinsAirplaneStateSpace(
+            turningRadius=self._turning_radius,
+            gam=math.radians(self._climb_angle_deg),
+        )
+        self._planner_mgr = TerrainOmplRrt(self._da_space)
+        self._planner_mgr.setMap(self._terrain_map)
+        self._planner_mgr.setAltitudeLimits(
+            max_altitude=self._max_agl_alt,
+            min_altitude=self._min_agl_alt,
+        )
+        self._planner_mgr.setBoundsFromMap(self._terrain_map.getGridMap())
+
+        # run initial configuration so we can finish setting up fences etc.
+        self._planner_mgr.configureProblem()
+
+        # update problem
+        problem = self._planner_mgr.getProblemSetup()
+
+        # TODO: need to list fences first (at least once, matbe each time?)
+        # set fences - must called be after configureProblem
+        # TODO: move to individual message handlers as do not have access
+        #       to the fence module in this process
+        # exclusion_polygons_enu = self.get_polyfences_exclusion_polygons_enu()
+        # inclusion_polygons_enu = self.get_polyfences_inclusion_polygons_enu()
+        # exclusion_circles_enu = self.get_polyfences_exclusion_circles_enu()
+        # inclusion_circles_enu = self.get_polyfences_inclusion_circles_enu()
+        # problem.setExclusionPolygons(exclusion_polygons_enu)
+        # problem.setInclusionPolygons(inclusion_polygons_enu)
+        # problem.setExclusionCircles(exclusion_circles_enu)
+        # problem.setInclusionCircles(inclusion_circles_enu)
+
+        # adjust validity checking resolution
+        resolution_requested = self._resolution / self._grid_length
+        problem.setStateValidityCheckingResolution(resolution_requested)
+
+        # if self.is_debug:
+        #     si = problem.getSpaceInformation()
+        #     resolution_used = si.getStateValidityCheckingResolution()
+        #     print(f"resolution used: {resolution_used}")
+
+        self._lock.release()
+
+    def run_planner(self):
+        self._lock.acquire()
+
+        # check start position is valid
+        if not self._start_is_valid:
+            msg = PlannerStatus(status="INVALID_START")
+            self._pipe_send.send(msg)
+            self._lock.release()
+            return
+
+        # check goal position is valid
+        if not self._goal_is_valid:
+            msg = PlannerStatus(status="INVALID_GOAL")
+            self._pipe_send.send(msg)
+            self._lock.release()
+            return
+
+        # set up problem and run
+        self._planner_mgr.setupProblem2(
+            self._start_pos_enu,
+            self._goal_pos_enu,
+            self._loiter_radius,
+        )
+
+        # run the solver
+        candidate_path = Path()
+        try:
+            self._planner_mgr.Solve1(
+                time_budget=self._time_budget,
+                path=candidate_path,
+            )
+        except RuntimeError as e:
+            # TODO: append error message
+            msg = PlannerStatus(status="PLANNER_EXCEPTION")
+            self._pipe_send.send(msg)
+            self._lock.release()
+            return
+
+        # return if no solution
+        if not self._planner_mgr.getProblemSetup().haveSolutionPath():
+            msg = PlannerStatus(status="NO_SOLUTION")
+            self._pipe_send.send(msg)
+            self._lock.release()
+            return
+
+        # TODO: replace string with an enum class for planner status
+        msg = PlannerStatus(status="OK")
+        self._pipe_send.send(msg)
+
+        # send path
+        msg = PlannerPath(path=candidate_path)
+        self._pipe_send.send(msg)
+
+        # send states
+        solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
+        states = solution_path.getStates()
+        msg = PlannerStates(states == states)
+        self._pipe_send.send(msg)
+
+        self._lock.release()
+
+    def have_gridmap_latlon(self):
+        # check the grid lat and lon have been set
+        self._lock.acquire()
+        result = self._grid_map_lat is not None and self._grid_map_lon is not None
+        self._lock.release()
+        return result
+
+    def set_start_pos_enu(self, lat, lon):
+        if lat is None or lon is None or not self.have_gridmap_latlon():
+            return
+
+        self._lock.acquire()
+
+        # calculate position (ENU)
+        (east, north) = TerrainNavModule.latlon_to_enu(
+            self._grid_map_lat, self._grid_map_lon, lat, lon
+        )
+
+        # adjust the altitudes above terrain
+        elevation = self._grid_map.atPosition("elevation", (east, north))
+        self._start_pos_enu = [
+            east,
+            north,
+            elevation + self._loiter_agl_alt,
+        ]
+
+        # check valid
+        radius = self._loiter_radius
+        self._start_is_valid = self._planner_mgr.validateCircle(
+            self._start_pos_enu, radius
+        )
+
+        self._lock.release()
+
+    def set_goal_pos_enu(self, lat, lon):
+        if lat is None or lon is None or not self.have_gridmap_latlon():
+            return
+
+        self._lock.acquire()
+
+        # calculate position (ENU)
+        (east, north) = TerrainNavModule.latlon_to_enu(
+            self._grid_map_lat, self._grid_map_lon, lat, lon
+        )
+
+        # adjust the altitudes above terrain
+        elevation = self._grid_map.atPosition("elevation", (east, north))
+        self._goal_pos_enu = [
+            east,
+            north,
+            elevation + self._loiter_agl_alt,
+        ]
+
+        # check valid
+        radius = self._turning_radius
+        self._goal_is_valid = self._planner_mgr.validateCircle(
+            self._goal_pos_enu, radius
+        )
+
+        self._lock.release()
