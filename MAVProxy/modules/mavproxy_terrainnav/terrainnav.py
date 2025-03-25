@@ -166,6 +166,9 @@ class TerrainNavModule(mp_module.MPModule):
         # process messages from the UI
         self.process_ui_msgs()
 
+        # process messages from the planner
+        self.process_planner_msgs()
+
         # send message list via pipe to UI at desired update rate
         if (time.time() - self._last_send) > self._send_delay:
             # pipe data to UI
@@ -254,7 +257,7 @@ class TerrainNavModule(mp_module.MPModule):
                 if self.is_debug:
                     print("[terrainnav] Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
-                self.start_planner_thread()
+                # self.start_planner_thread()
 
                 # *** multiprocessing ***
                 self._parent_pipe_send.send(PlannerCmdRunPlanner())
@@ -301,6 +304,35 @@ class TerrainNavModule(mp_module.MPModule):
                 if self.is_debug:
                     print("[terrainnav] unknown message from UI")
 
+    def process_planner_msgs(self):
+        while self._parent_pipe_recv.poll():
+            msg = self._parent_pipe_recv.recv()
+
+            if isinstance(msg, PlannerStartLatLon):
+                print(
+                    f"[terrainnav] PlannerStartLatLon: {msg.start_latlon}, "
+                    f"is_valid: {msg.is_valid}"
+                )
+                (lat, lon) = msg.start_latlon
+                self.draw_start(lat, lon, msg.is_valid)
+            elif isinstance(msg, PlannerGoalLatLon):
+                print(
+                    f"[terrainnav] PlannerGoalLatLon: {msg.goal_latlon}, "
+                    f"is_valid: {msg.is_valid}"
+                )
+                (lat, lon) = msg.goal_latlon
+                self.draw_goal(lat, lon, msg.is_valid)
+            elif isinstance(msg, PlannerStatus):
+                print(f"[terrainnav] PlannerStatus: {msg.status}")
+            elif isinstance(msg, PlannerPath):
+                print(f"[terrainnav] PlannerPath: {msg.path}")
+            elif isinstance(msg, PlannerStates):
+                print(f"[terrainnav] PlannerStates: {msg.states}")
+            else:
+                # TODO: raise an exception
+                if self.is_debug:
+                    print("[terrainnav] unknown message from planner")
+
     def init_slip_map_layer(self):
         """
         Initialise a slip map layer for terrain navigation.
@@ -328,15 +360,17 @@ class TerrainNavModule(mp_module.MPModule):
         if lat is None or lon is None:
             return
 
-        self._start_latlon = (lat, lon)
-        self.set_start_pos_enu(lat, lon)
+        # TODO: remove - move to multiprocessing
+        # self._start_latlon = (lat, lon)
+        # self.set_start_pos_enu(lat, lon)
 
         # *** multiprocessing ***
-        self._planner_lock.acquire()
         self._parent_pipe_send.send(PlannerStartLatLon((lat, lon)))
-        self._planner_lock.release()
 
     def set_start_pos_enu(self, lat, lon):
+        # TODO move to multiprocessing
+        return
+
         if lat is None or lon is None:
             return
 
@@ -366,18 +400,27 @@ class TerrainNavModule(mp_module.MPModule):
 
         self.draw_circle(self._map_start_id, lat, lon, radius, colour)
 
+    def draw_start(self, lat, lon, is_valid):
+        radius = self.terrainnav_settings.loiter_radius
+        colour = (0, 255, 0) if is_valid else (255, 0, 0)
+        self.draw_circle(self._map_start_id, lat, lon, radius, colour)
+
     def set_goal(self):
         (lat, lon) = self.get_map_click_location()
         if lat is None or lon is None:
             return
 
-        self._goal_latlon = (lat, lon)
-        self.set_goal_pos_enu(lat, lon)
+        # TODO: remove - move to multiprocessing
+        # self._goal_latlon = (lat, lon)
+        # self.set_goal_pos_enu(lat, lon)
 
         # *** multiprocessing ***
         self._parent_pipe_send.send(PlannerGoalLatLon((lat, lon)))
 
     def set_goal_pos_enu(self, lat, lon):
+        # TODO move to multiprocessing
+        return
+
         if lat is None or lon is None:
             return
 
@@ -405,6 +448,11 @@ class TerrainNavModule(mp_module.MPModule):
 
         self._planner_lock.release()
 
+        self.draw_circle(self._map_goal_id, lat, lon, radius, colour)
+
+    def draw_goal(self, lat, lon, is_valid):
+        radius = self.terrainnav_settings.turning_radius
+        colour = (0, 255, 0) if is_valid else (255, 0, 0)
         self.draw_circle(self._map_goal_id, lat, lon, radius, colour)
 
     def show_planner_boundary(self):
@@ -562,6 +610,8 @@ class TerrainNavModule(mp_module.MPModule):
         self.clear_start_goal()
 
     def init_terrain_map(self):
+        # TODO move to multiprocessing
+        return
 
         # get home position
         wp_module = self.module("wp")
@@ -582,7 +632,9 @@ class TerrainNavModule(mp_module.MPModule):
             self._parent_pipe_send.send(PlannerGridLatLon((home.x, home.y)))
 
         if self.is_debug:
-            print(f"[terrainnav] set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}")
+            print(
+                f"[terrainnav] set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}"
+            )
         self._grid_map = GridMapSRTM(
             map_lat=self._grid_map_lat, map_lon=self._grid_map_lon
         )
@@ -605,6 +657,9 @@ class TerrainNavModule(mp_module.MPModule):
         """
         Initialise the planner
         """
+        # TODO move to multiprocessing
+        return
+
         # NOTE: initialisation ordering is tricky given current planner mgr
         # - may need to modify upstream
         #
@@ -686,6 +741,9 @@ class TerrainNavModule(mp_module.MPModule):
         """
         Planner task run on the planner thread
         """
+        # TODO move to multiprocessing
+        return
+
         self._planner_lock.acquire()
 
         # check start position is valid
@@ -755,6 +813,14 @@ class TerrainNavModule(mp_module.MPModule):
         if self.is_planner_alive():
             return
 
+        # get home position
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+        home = wp_module.get_home()
+        if home is None:
+            return
+
         # TODO: pass initial settings as argument to the planner (dict)?
         self._planner_process = TerrainPlanner(
             self._planner_pipe_send,
@@ -796,7 +862,8 @@ class TerrainNavModule(mp_module.MPModule):
             PlannerResolution(self.terrainnav_settings.resolution)
         )
 
-        # TODO: send initial grid map position
+        # send initial grid map position
+        self._parent_pipe_send.send(PlannerGridLatLon((home.x, home.y)))
 
     def stop_planner(self):
         if not self.is_planner_alive():
@@ -806,7 +873,9 @@ class TerrainNavModule(mp_module.MPModule):
         self._planner_process.join(timeout=2.0)
 
         if self.is_planner_alive():
-            print(f"[terrainnav] planner process timed out, killing it", file=sys.stderr)
+            print(
+                f"[terrainnav] planner process timed out, killing it", file=sys.stderr
+            )
             self.kill_planner()
 
     def kill_planner(self):
@@ -1150,13 +1219,15 @@ class TerrainNavModule(mp_module.MPModule):
 
 
 class PlannerStartLatLon:
-    def __init__(self, start_latlon):
+    def __init__(self, start_latlon, is_valid=False):
         self.start_latlon = start_latlon
+        self.is_valid = is_valid
 
 
 class PlannerGoalLatLon:
-    def __init__(self, goal_latlon):
+    def __init__(self, goal_latlon, is_valid=False):
         self.goal_latlon = goal_latlon
+        self.is_valid = is_valid
 
 
 class PlannerLoiterAglAlt:
@@ -1641,10 +1712,11 @@ class TerrainPlanner(multiproc.Process):
         self._pipe_send.send(msg)
 
         # send states
-        solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
-        states = solution_path.getStates()
-        msg = PlannerStates(states == states)
-        self._pipe_send.send(msg)
+        # TODO: cannot send ompl states (cannot be pickled)
+        # solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
+        # states = solution_path.getStates()
+        # msg = PlannerStates(states=states)
+        # self._pipe_send.send(msg)
 
         self._lock.release()
 
@@ -1680,6 +1752,9 @@ class TerrainPlanner(multiproc.Process):
             self._start_pos_enu, radius
         )
 
+        # send validated position
+        self._pipe_send.send(PlannerStartLatLon((lat, lon), self._start_is_valid))
+
         self._lock.release()
 
     def set_goal_pos_enu(self, lat, lon):
@@ -1706,5 +1781,8 @@ class TerrainPlanner(multiproc.Process):
         self._goal_is_valid = self._planner_mgr.validateCircle(
             self._goal_pos_enu, radius
         )
+
+        # send validated position
+        self._pipe_send.send(PlannerGoalLatLon((lat, lon), self._goal_is_valid))
 
         self._lock.release()
