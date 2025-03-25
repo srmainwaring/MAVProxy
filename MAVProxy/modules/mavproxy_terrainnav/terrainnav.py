@@ -165,7 +165,7 @@ class TerrainNavModule(mp_module.MPModule):
         """
         Close the app and unload the module.
         """
-        self.clear_map()
+        self.clear_slip_map()
         self.app.stop_ui()
         self.stop_planner()
 
@@ -184,23 +184,47 @@ class TerrainNavModule(mp_module.MPModule):
             print(usage)
 
     def cmd_set(self, args):
-        # TODO: be more selective when to reinitialise
         self.terrainnav_settings.command(args[1:])
 
-        # TODO: ensure all settings are sent to planner process
-        if args[1] == "loiter_radius":
-            self._parent_pipe_send.send(
-                PlannerLoiterRadius(self.terrainnav_settings.loiter_radius)
-            )
+        if len(args) < 2:
+            return
 
-        if args[1] == "turning_radius":
-            self._parent_pipe_send.send(
-                PlannerTurningRadius(self.terrainnav_settings.turning_radius)
-            )
-
+        # TODO: find more compact way to ensure all settings are sent to planner
         if args[1] == "loiter_agl_alt":
             self._parent_pipe_send.send(
                 PlannerLoiterAglAlt(self.terrainnav_settings.loiter_agl_alt)
+            )
+        elif args[1] == "loiter_radius":
+            self._parent_pipe_send.send(
+                PlannerLoiterRadius(self.terrainnav_settings.loiter_radius)
+            )
+        elif args[1] == "turning_radius":
+            self._parent_pipe_send.send(
+                PlannerTurningRadius(self.terrainnav_settings.turning_radius)
+            )
+        elif args[1] == "climb_angle_deg":
+            self._parent_pipe_send.send(
+                PlannerClimbAngleDeg(self.terrainnav_settings.climb_angle_deg)
+            )
+        elif args[1] == "max_agl_alt":
+            self._parent_pipe_send.send(
+                PlannerMaxAglAlt(self.terrainnav_settings.max_agl_alt)
+            )
+        elif args[1] == "min_agl_alt":
+            self._parent_pipe_send.send(
+                PlannerMinAglAlt(self.terrainnav_settings.min_agl_alt)
+            )
+        elif args[1] == "grid_spacing":
+            self._parent_pipe_send.send(
+                PlannerGridSpacing(self.terrainnav_settings.grid_spacing)
+            )
+        elif args[1] == "grid_length":
+            self._parent_pipe_send.send(
+                PlannerGridLength(self.terrainnav_settings.grid_length)
+            )
+        elif args[1] == "time_budget":
+            self._parent_pipe_send.send(
+                PlannerTimeBudget(self.terrainnav_settings.time_budget)
             )
 
     # TODO: review various `clear_xxx`` options
@@ -208,7 +232,7 @@ class TerrainNavModule(mp_module.MPModule):
         """
         Clear current plan
         """
-        self.clear_map()
+        self.clear_slip_map()
 
     def process_ui_msgs(self):
         while self.app.parent_pipe_recv.poll():
@@ -434,8 +458,7 @@ class TerrainNavModule(mp_module.MPModule):
             )
             map_module.map.add_object(slip_polygon)
 
-    # TODO: rename to `clear_slip_map`
-    def clear_map(self):
+    def clear_slip_map(self):
         """
         Remove terrain navigation objects from the map.
         """
