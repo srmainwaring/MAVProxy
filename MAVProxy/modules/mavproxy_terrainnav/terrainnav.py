@@ -23,11 +23,6 @@ from MAVProxy.modules.mavproxy_terrainnav import terrainnav_msgs
 if mp_util.has_wxpython:
     from MAVProxy.modules.lib.mp_menu import MPMenuSubMenu
 
-# open motion planner
-from ompl import base as ob
-from ompl import geometric as og
-from ompl import util as ou
-
 from pymavlink import mavutil
 
 # terrain navigation
