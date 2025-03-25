@@ -2,7 +2,6 @@
 Terrain navigation module
 """
 
-import copy
 import math
 import sys
 import time
@@ -190,19 +189,16 @@ class TerrainNavModule(mp_module.MPModule):
 
         # TODO: ensure all settings are sent to planner process
         if args[1] == "loiter_radius":
-            # *** multiprocessing ***
             self._parent_pipe_send.send(
                 PlannerLoiterRadius(self.terrainnav_settings.loiter_radius)
             )
 
         if args[1] == "turning_radius":
-            # *** multiprocessing ***
             self._parent_pipe_send.send(
                 PlannerTurningRadius(self.terrainnav_settings.turning_radius)
             )
 
         if args[1] == "loiter_agl_alt":
-            # *** multiprocessing ***
             self._parent_pipe_send.send(
                 PlannerLoiterAglAlt(self.terrainnav_settings.loiter_agl_alt)
             )
@@ -229,9 +225,7 @@ class TerrainNavModule(mp_module.MPModule):
                 if self.is_debug:
                     print("[terrainnav] Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
-                # *** multiprocessing ***
                 self._parent_pipe_send.send(PlannerCmdRunPlanner())
-
             elif isinstance(msg, terrainnav_msgs.GenWaypoints):
                 self.gen_waypoints()
             elif isinstance(msg, terrainnav_msgs.ClearPath):
@@ -305,6 +299,7 @@ class TerrainNavModule(mp_module.MPModule):
             elif isinstance(msg, PlannerStates):
                 if self.is_debug:
                     print(f"[terrainnav] PlannerStates: {msg.states}")
+                self.draw_states(msg.states)
             else:
                 # TODO: raise an exception
                 if self.is_debug:
@@ -387,7 +382,6 @@ class TerrainNavModule(mp_module.MPModule):
         if self._is_boundary_visible:
             self.show_planner_boundary()
 
-        # *** multiprocessing ***
         self._parent_pipe_send.send(PlannerGridLatLon((lat, lon)))
 
     def draw_circle(self, id, lat, lon, radius, colour):
@@ -492,8 +486,6 @@ class TerrainNavModule(mp_module.MPModule):
         self.clear_waypoints()
         self.clear_start_goal()
 
-    # *** multiprocessing ***
-
     def start_planner(self):
         if self.is_planner_alive():
             return
@@ -575,8 +567,6 @@ class TerrainNavModule(mp_module.MPModule):
     def is_planner_alive(self):
         return self._planner_process is not None and self._planner_process.is_alive()
 
-    # *** multiprocessing ***
-
     def draw_path(self, path):
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
@@ -616,6 +606,10 @@ class TerrainNavModule(mp_module.MPModule):
             map_module.map.add_object(slip_polygon)
 
     def draw_states(self, states):
+        """
+        :param states: list of Dubins airplane states (x, y, z, yaw)
+        :type states: list[float, float, float, float]
+        """
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
 
@@ -628,8 +622,8 @@ class TerrainNavModule(mp_module.MPModule):
 
         polygon = []
         for i, state in enumerate(states):
-            pos = TerrainOmplRrt.dubinsairplanePosition(state)
-            yaw = TerrainOmplRrt.dubinsairplaneYaw(state)
+            pos = state[:3]
+            yaw = state[3]
             east = pos[0]
             north = pos[1]
             point = mp_util.gps_offset(map_lat, map_lon, east, north)
@@ -929,9 +923,9 @@ class TerrainPlanner(multiproc.Process):
 
         # *** fences ***
         self._exclusion_polygons = []
-        self._inclusion_polygons_enu = []
-        self._exclusion_circles_enu = []
-        self._inclusion_circles_enu = []
+        self._inclusion_polygons = []
+        self._exclusion_circles = []
+        self._inclusion_circles = []
 
     def run(self):
         # start threads
@@ -1197,8 +1191,7 @@ class TerrainPlanner(multiproc.Process):
         self._lock.release()
 
     def init_planner(self):
-        # NOTE: initialisation ordering is tricky given current planner mgr
-        # - may need to modify upstream
+        # NOTE: initialisation ordering
         #
         # - create the state space
         # - set the map
@@ -1269,6 +1262,7 @@ class TerrainPlanner(multiproc.Process):
         resolution_requested = self._resolution / self._grid_length
         problem.setStateValidityCheckingResolution(resolution_requested)
 
+        # TODO: enable debug - will need message from mddule
         # if self.is_debug:
         #     si = problem.getSpaceInformation()
         #     resolution_used = si.getStateValidityCheckingResolution()
@@ -1330,11 +1324,16 @@ class TerrainPlanner(multiproc.Process):
         self._pipe_send.send(msg)
 
         # send states
-        # TODO: cannot send ompl states (cannot be pickled)
-        # solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
-        # states = solution_path.getStates()
-        # msg = PlannerStates(states=states)
-        # self._pipe_send.send(msg)
+        # NOTE: cannot send ompl states (cannot be pickled)
+        solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
+        ompl_states = solution_path.getStates()
+        states = []
+        for state in ompl_states:
+            pos = TerrainOmplRrt.dubinsairplanePosition(state)
+            yaw = TerrainOmplRrt.dubinsairplaneYaw(state)
+            states.append([pos[0], pos[1], pos[2], yaw])
+        msg = PlannerStates(states=states)
+        self._pipe_send.send(msg)
 
         self._lock.release()
 
