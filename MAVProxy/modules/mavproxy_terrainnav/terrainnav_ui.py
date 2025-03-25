@@ -14,8 +14,6 @@ class TerrainNavFrame(wx.Frame):
 
         # control update rate
         self._timer = wx.Timer(self)
-        self._fps = 10.0
-        self._start_time = time.time()
 
         # buttons
         button_size = (120, 25)
@@ -191,12 +189,9 @@ class TerrainNavFrame(wx.Frame):
 
         # receive data from the module
         while self._state.ui_pipe_recv.poll():
-            obj_list = self._state.ui_pipe_recv.recv()
-            for obj in obj_list:
+            msg_list = self._state.ui_pipe_recv.recv()
+            for msg in msg_list:
                 pass
-
-        # reset counters
-        self._start_time = time.time()
 
     def on_idle(self, event):
         """

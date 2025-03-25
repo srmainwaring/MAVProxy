@@ -98,10 +98,9 @@ class TerrainNavApp:
         """
         return self.ui_process is not None and self.ui_process.is_alive()
 
-    # TODO: move to module as we require the module state, but cannot pass
-    #       the state the the app object, as the state context conflicts with
-    #       the UI task and the process will not start
-    #
+    # NOTE: method moved to module as we require the module state, but cannot
+    #       pass the state the the app object, as the state context conflicts
+    #       with the UI task and the process will not start
     # def process_ui_msgs(self):
     #     # moved...
 
