@@ -2,8 +2,6 @@
 Terrain navigation UI
 """
 
-import time
-
 from MAVProxy.modules.lib.wx_loader import wx
 
 from MAVProxy.modules.mavproxy_terrainnav import terrainnav_msgs
