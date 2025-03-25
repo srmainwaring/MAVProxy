@@ -91,10 +91,6 @@ class TerrainNavModule(mp_module.MPModule):
             if console_module is not None:
                 console_module.add_menu(menu)
 
-        # threading and multiprocessing
-        # self._planner_thread = None
-        # self._planner_lock = multiproc.Lock()
-
         # start the terrain nav app
         self.app = terrainnav_app.TerrainNavApp(title="Terrain Navigation")
         self.app.start_ui()
@@ -106,18 +102,8 @@ class TerrainNavModule(mp_module.MPModule):
         self._msg_list = []
 
         # *** planner state ***
-        # self._start_latlon = (None, None)
-        # self._start_pos_enu = (None, None)
-        # self._start_is_valid = False
-        # self._goal_latlon = (None, None)
-        # self._goal_pos_enu = (None, None)
-        # self._goal_is_valid = False
-        # self._grid_map = None
         self._grid_map_lat = None
         self._grid_map_lon = None
-        # self._terrain_map = None
-        # self._da_space = None
-        # self._planner_mgr = None
         self._candidate_path = None
 
         # *** slip map state ***
@@ -141,8 +127,6 @@ class TerrainNavModule(mp_module.MPModule):
         self._planner_close_event = multiproc.Event()
         self._planner_close_event.clear()
 
-        self.init_terrain_map()
-        self.init_planner()
         self.start_planner()
 
     def mavlink_packet(self, m) -> None:
@@ -204,32 +188,20 @@ class TerrainNavModule(mp_module.MPModule):
         # TODO: be more selective when to reinitialise
         self.terrainnav_settings.command(args[1:])
 
-        # TODO: recalc here is called often by auto-complete...
-        if args[1:]:
-            self.init_terrain_map()
-            self.init_planner()
-
-        # update start and goal circles if changed
+        # TODO: ensure all settings are sent to planner process
         if args[1] == "loiter_radius":
-            # self.set_start_pos_enu(*self._start_latlon)
-
             # *** multiprocessing ***
             self._parent_pipe_send.send(
                 PlannerLoiterRadius(self.terrainnav_settings.loiter_radius)
             )
 
         if args[1] == "turning_radius":
-            # self.set_goal_pos_enu(*self._goal_latlon)
-
             # *** multiprocessing ***
             self._parent_pipe_send.send(
                 PlannerTurningRadius(self.terrainnav_settings.turning_radius)
             )
 
         if args[1] == "loiter_agl_alt":
-            # self.set_start_pos_enu(*self._start_latlon)
-            # self.set_goal_pos_enu(*self._goal_latlon)
-
             # *** multiprocessing ***
             self._parent_pipe_send.send(
                 PlannerLoiterAglAlt(self.terrainnav_settings.loiter_agl_alt)
@@ -257,8 +229,6 @@ class TerrainNavModule(mp_module.MPModule):
                 if self.is_debug:
                     print("[terrainnav] Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
-                # self.start_planner_thread()
-
                 # *** multiprocessing ***
                 self._parent_pipe_send.send(PlannerCmdRunPlanner())
 
@@ -413,14 +383,6 @@ class TerrainNavModule(mp_module.MPModule):
         self._grid_map_lat = lat
         self._grid_map_lon = lon
 
-        # TODO: choose a better name - will be updating the terrain map...
-        # self.init_terrain_map()
-        # self.init_planner()
-
-        # TODO: update the start and end positions in the map ENU frame
-        # self.set_start_pos_enu(*self._start_latlon)
-        # self.set_goal_pos_enu(*self._goal_latlon)
-
         # redraw boundary
         if self._is_boundary_visible:
             self.show_planner_boundary()
@@ -478,6 +440,7 @@ class TerrainNavModule(mp_module.MPModule):
             )
             map_module.map.add_object(slip_polygon)
 
+    # TODO: rename to `clear_slip_map`
     def clear_map(self):
         """
         Remove terrain navigation objects from the map.
@@ -528,208 +491,6 @@ class TerrainNavModule(mp_module.MPModule):
         self.clear_path()
         self.clear_waypoints()
         self.clear_start_goal()
-
-    def init_terrain_map(self):
-        # TODO move to multiprocessing
-        return
-
-        # get home position
-        wp_module = self.module("wp")
-        if wp_module is None:
-            return
-        home = wp_module.get_home()
-        if home is None:
-            return
-
-        self._planner_lock.acquire()
-
-        # set the terrain map origin to home if not set
-        if self._grid_map_lat is None or self._grid_map_lon is None:
-            self._grid_map_lat = home.x
-            self._grid_map_lon = home.y
-
-            # *** multiprocessing ***
-            self._parent_pipe_send.send(PlannerGridLatLon((home.x, home.y)))
-
-        if self.is_debug:
-            print(
-                f"[terrainnav] set grid map origin: {self._grid_map_lat}, {self._grid_map_lon}"
-            )
-        self._grid_map = GridMapSRTM(
-            map_lat=self._grid_map_lat, map_lon=self._grid_map_lon
-        )
-        self._grid_map.setGridSpacing(self.terrainnav_settings.grid_spacing)
-        self._grid_map.setGridLength(self.terrainnav_settings.grid_length)
-
-        # set up distance layer (too slow in current version)
-        if self.is_debug:
-            print(f"[terrainnav] calculating distance-surface...", end="")
-        # self._grid_map.addLayerDistanceTransform(surface_distance=self.terrainnav_settings.min_agl_alt)
-        if self.is_debug:
-            print(f"done.")
-
-        self._terrain_map = TerrainMap()
-        self._terrain_map.setGridMap(self._grid_map)
-
-        self._planner_lock.release()
-
-    def init_planner(self):
-        """
-        Initialise the planner
-        """
-        # TODO move to multiprocessing
-        return
-
-        # NOTE: initialisation ordering is tricky given current planner mgr
-        # - may need to modify upstream
-        #
-        # - create the state space
-        # - set the map
-        # - set altitude limits
-        # - set bounds
-        # - configureProblem:
-        #   requires:
-        #     - map
-        #     - bounds (altitude limits)
-        #   creates:
-        #     - default planner
-        #     - default objective
-        #     - terrain collision validatity checker
-        #     - planner data
-        # - set start and goal states
-        # - setup problem
-        #   - (re-runs configureProblem internally)
-
-        self._planner_lock.acquire()
-
-        # recreate planner, as inputs may change
-        self._da_space = DubinsAirplaneStateSpace(
-            turningRadius=self.terrainnav_settings.turning_radius,
-            gam=math.radians(self.terrainnav_settings.climb_angle_deg),
-        )
-        self._planner_mgr = TerrainOmplRrt(self._da_space)
-        self._planner_mgr.setMap(self._terrain_map)
-        self._planner_mgr.setAltitudeLimits(
-            max_altitude=self.terrainnav_settings.max_agl_alt,
-            min_altitude=self.terrainnav_settings.min_agl_alt,
-        )
-        self._planner_mgr.setBoundsFromMap(self._terrain_map.getGridMap())
-
-        # run initial configuration so we can finish setting up fences etc.
-        self._planner_mgr.configureProblem()
-
-        # update problem
-        problem = self._planner_mgr.getProblemSetup()
-
-        # TODO: need to list fences first (at least once, matbe each time?)
-        # set fences - must called be after configureProblem
-        exclusion_polygons_enu = self.get_polyfences_exclusion_polygons_enu()
-        inclusion_polygons_enu = self.get_polyfences_inclusion_polygons_enu()
-        exclusion_circles_enu = self.get_polyfences_exclusion_circles_enu()
-        inclusion_circles_enu = self.get_polyfences_inclusion_circles_enu()
-        problem.setExclusionPolygons(exclusion_polygons_enu)
-        problem.setInclusionPolygons(inclusion_polygons_enu)
-        problem.setExclusionCircles(exclusion_circles_enu)
-        problem.setInclusionCircles(inclusion_circles_enu)
-
-        # adjust validity checking resolution
-        resolution_requested = (
-            self.terrainnav_settings.resolution / self.terrainnav_settings.grid_length
-        )
-        problem.setStateValidityCheckingResolution(resolution_requested)
-
-        if self.is_debug:
-            si = problem.getSpaceInformation()
-            resolution_used = si.getStateValidityCheckingResolution()
-            print(f"[terrainnav] resolution used: {resolution_used}")
-
-        self._planner_lock.release()
-
-    def start_planner_thread(self):
-        """
-        Start the planner thread
-        """
-        # TODO move to multiprocessing
-        return
-
-        if self._planner_thread:
-            return
-
-        t = threading.Thread(target=self.run_planner, name="PlannerThread")
-        t.daemon = True
-        self._planner_thread = t
-        t.start()
-
-    def run_planner(self):
-        """
-        Planner task run on the planner thread
-        """
-        # TODO move to multiprocessing
-        return
-
-        self._planner_lock.acquire()
-
-        # check start position is valid
-        if not self._start_is_valid:
-            print(f"[terrainnav] invalid start position: {self._start_pos_enu}")
-            self._planner_lock.release()
-            self._planner_thread = None
-            return
-
-        # check goal position is valid
-        if not self._goal_is_valid:
-            print(f"[terrainnav] invalid goal position: {self._start_pos_enu}")
-            self._planner_lock.release()
-            self._planner_thread = None
-            return
-
-        if self.is_debug:
-            print(f"[terrainnav] run planner")
-            print(f"[terrainnav] start_pos_enu: {self._start_pos_enu}")
-            print(f"[terrainnav] goal_pos_enu: {self._goal_pos_enu}")
-
-        # set up problem and run
-        self._planner_mgr.setupProblem2(
-            self._start_pos_enu,
-            self._goal_pos_enu,
-            self.terrainnav_settings.loiter_radius,
-        )
-
-        # run the solver
-        self._candidate_path = Path()
-        try:
-            self._planner_mgr.Solve1(
-                time_budget=self.terrainnav_settings.time_budget,
-                path=self._candidate_path,
-            )
-        except RuntimeError as e:
-            print(f"[terrainnav] {e}")
-            self._planner_lock.release()
-            self._planner_thread = None
-            return
-
-        # return if no solution
-        if not self._planner_mgr.getProblemSetup().haveSolutionPath():
-            self._planner_lock.release()
-            self._planner_thread = None
-            return
-
-        solution_path = self._planner_mgr.getProblemSetup().getSolutionPath()
-        states = solution_path.getStates()
-        self.draw_states(states)
-
-        # verify the path is valid
-        position = self._candidate_path.position()
-        if len(position) == 0:
-            if self.is_debug:
-                print("[terrainnav] failed to solve for trajectory")
-            self._planner_lock.release()
-            self._planner_thread = None
-            return
-
-        self.draw_path(self._candidate_path)
-        self._planner_lock.release()
-        self._planner_thread = None
 
     # *** multiprocessing ***
 
@@ -996,127 +757,6 @@ class TerrainNavModule(mp_module.MPModule):
     def is_debug(self):
         return self.mpstate.settings.moddebug > 1
 
-    @staticmethod
-    def latlon_to_enu(origin_lat, origin_lon, lat, lon):
-        distance = mp_util.gps_distance(origin_lat, origin_lon, lat, lon)
-        bearing_deg = mp_util.gps_bearing(origin_lat, origin_lon, lat, lon)
-        bearing_rad = math.radians(bearing_deg)
-        east = distance * math.sin(bearing_rad)
-        north = distance * math.cos(bearing_rad)
-        return (east, north)
-
-    @staticmethod
-    def polyfences_polygon_to_enu(origin_lat, origin_lon, polygons):
-        """
-        Convert polyfences polygones to ENU point polygons.
-
-        :param origin_lat: latitude of the grid map origin
-        :type origin_lat: float
-        :param origin_lon: longitude of the grid map origin
-        :type origin_lon: float
-        :param polygons: list of MAVLink polyfences
-        :return: list of polygons in ENU frame
-        :rtype" list[list[tuple[float, float]]]
-        """
-        polygons_enu = []
-        for polygon in polygons:
-            points_enu = []
-            for point in polygon:
-                lat = point.x
-                lon = point.y
-                if point.get_type() == "MISSION_ITEM_INT":
-                    lat *= 1e-7
-                    lon *= 1e-7
-                point_enu = TerrainNavModule.latlon_to_enu(
-                    origin_lat, origin_lon, lat, lon
-                )
-                points_enu.append(point_enu)
-            polygons_enu.append(points_enu)
-        return polygons_enu
-
-    def polyfences_circle_to_enu(origin_lat, origin_lon, circles):
-        circles_enu = []
-        for circle in circles:
-            lat = circle.x
-            lon = circle.y
-            if circle.get_type() == "MISSION_ITEM_INT":
-                lat *= 1e-7
-                lon *= 1e-7
-            (east, north) = TerrainNavModule.latlon_to_enu(
-                origin_lat, origin_lon, lat, lon
-            )
-            radius = circle.param1
-            circles_enu.append((east, north, radius))
-        return circles_enu
-
-    def get_polyfences_exclusion_polygons_enu(self):
-        """
-        Get exclusion polygons from the 'fence' module and convert to ENU frame.
-
-        :return: list of polygons in terrain map ENU frame
-        :rtype" list[list[tuple[float, float]]]
-        """
-        fence_module = self.module("fence")
-        if fence_module is None:
-            return
-
-        polygons = fence_module.exclusion_polygons()
-        polygons_enu = TerrainNavModule.polyfences_polygon_to_enu(
-            self._grid_map_lat, self._grid_map_lon, polygons
-        )
-        return polygons_enu
-
-    def get_polyfences_inclusion_polygons_enu(self):
-        """
-        Get inclusion polygons from the 'fence' module and convert to ENU frame.
-
-        :return: list of polygons in terrain map ENU frame
-        :rtype" list[list[tuple[float, float]]]
-        """
-        fence_module = self.module("fence")
-        if fence_module is None:
-            return
-
-        polygons = fence_module.inclusion_polygons()
-        polygons_enu = TerrainNavModule.polyfences_polygon_to_enu(
-            self._grid_map_lat, self._grid_map_lon, polygons
-        )
-        return polygons_enu
-
-    def get_polyfences_exclusion_circles_enu(self):
-        """
-        Get exclusion circles from the 'fence' module and convert to ENU frame.
-
-        :return: list of circles in terrain map ENU frame
-        :rtype" list[list[tuple[float, float]]]
-        """
-        fence_module = self.module("fence")
-        if fence_module is None:
-            return
-
-        circles = fence_module.exclusion_circles()
-        circles_enu = TerrainNavModule.polyfences_circle_to_enu(
-            self._grid_map_lat, self._grid_map_lon, circles
-        )
-        return circles_enu
-
-    def get_polyfences_inclusion_circles_enu(self):
-        """
-        Get inclusion circles from the 'fence' module and convert to ENU frame.
-
-        :return: list of circles in terrain map ENU frame
-        :rtype" list[list[tuple[float, float]]]
-        """
-        fence_module = self.module("fence")
-        if fence_module is None:
-            return
-
-        circles = fence_module.inclusion_circles()
-        circles_enu = TerrainNavModule.polyfences_circle_to_enu(
-            self._grid_map_lat, self._grid_map_lon, circles
-        )
-        return circles_enu
-
     def check_reinit_fencepoints(self):
         # NOTE: see: mavproxy_map check_redisplay_fencepoints
         fence_module = self.module("fence")
@@ -1129,7 +769,13 @@ class TerrainNavModule(mp_module.MPModule):
                 last_change = fence_module.fenceloader.last_change
             if self._fence_change_time != last_change:
                 self._fence_change_time = last_change
-                self.init_planner()
+                # send polyfences to planner process
+                msg = PlannerPolyFences()
+                msg.exclusion_polygons = fence_module.exclusion_polygons()
+                msg.inclusion_polygons = fence_module.inclusion_polygons()
+                msg.exclusion_circles = fence_module.exclusion_circles()
+                msg.inclusion_circles = fence_module.inclusion_circles()
+                self._parent_pipe_send.send(msg)
 
 
 # data messages [in]
@@ -1202,6 +848,14 @@ class PlannerResolution:
         self.resolution = resolution
 
 
+class PlannerPolyFences:
+    def __init__(self):
+        self.exclusion_polygons = []
+        self.inclusion_polygons = []
+        self.exclusion_circles = []
+        self.inclusion_circles = []
+
+
 # data messages [out]
 
 
@@ -1272,6 +926,12 @@ class TerrainPlanner(multiproc.Process):
         self._terrain_map = None
         self._da_space = None
         self._planner_mgr = None
+
+        # *** fences ***
+        self._exclusion_polygons = []
+        self._inclusion_polygons_enu = []
+        self._exclusion_circles_enu = []
+        self._inclusion_circles_enu = []
 
     def run(self):
         # start threads
@@ -1388,6 +1048,8 @@ class TerrainPlanner(multiproc.Process):
                     self.on_time_budget(msg)
                 elif isinstance(msg, PlannerResolution):
                     self.on_resolution(msg)
+                elif isinstance(msg, PlannerPolyFences):
+                    self.on_polyfences(msg)
                 elif isinstance(msg, PlannerCmdRunPlanner):
                     self.on_cmd_run_planner(msg)
 
@@ -1494,8 +1156,18 @@ class TerrainPlanner(multiproc.Process):
         self._do_init_planner = True
         self._lock.release()
 
+    def on_polyfences(self, msg):
+        print(f"[TerrainPlanner] PlannerPolyFences")
+        self._lock.acquire()
+        self._exclusion_polygons = msg.exclusion_polygons
+        self._inclusion_polygons = msg.inclusion_polygons
+        self._exclusion_circles = msg.exclusion_circles
+        self._inclusion_circles = msg.inclusion_circles
+        self._do_init_planner = True
+        self._lock.release()
+
     def on_cmd_run_planner(self, msg):
-        print(f"[TerrainPlanner] PlannerCmdRunPlanner:")
+        print(f"[TerrainPlanner] PlannerCmdRunPlanner")
         self._lock.acquire()
         self._do_run_planner = True
         self._lock.release()
@@ -1525,6 +1197,26 @@ class TerrainPlanner(multiproc.Process):
         self._lock.release()
 
     def init_planner(self):
+        # NOTE: initialisation ordering is tricky given current planner mgr
+        # - may need to modify upstream
+        #
+        # - create the state space
+        # - set the map
+        # - set altitude limits
+        # - set bounds
+        # - configureProblem:
+        #   requires:
+        #     - map
+        #     - bounds (altitude limits)
+        #   creates:
+        #     - default planner
+        #     - default objective
+        #     - terrain collision validatity checker
+        #     - planner data
+        # - set start and goal states
+        # - setup problem
+        #   - (re-runs configureProblem internally)
+
         self._lock.acquire()
 
         # check the terrain map has been initialised
@@ -1551,18 +1243,27 @@ class TerrainPlanner(multiproc.Process):
         # update problem
         problem = self._planner_mgr.getProblemSetup()
 
-        # TODO: need to list fences first (at least once, matbe each time?)
         # set fences - must called be after configureProblem
-        # TODO: move to individual message handlers as do not have access
-        #       to the fence module in this process
-        # exclusion_polygons_enu = self.get_polyfences_exclusion_polygons_enu()
-        # inclusion_polygons_enu = self.get_polyfences_inclusion_polygons_enu()
-        # exclusion_circles_enu = self.get_polyfences_exclusion_circles_enu()
-        # inclusion_circles_enu = self.get_polyfences_inclusion_circles_enu()
-        # problem.setExclusionPolygons(exclusion_polygons_enu)
-        # problem.setInclusionPolygons(inclusion_polygons_enu)
-        # problem.setExclusionCircles(exclusion_circles_enu)
-        # problem.setInclusionCircles(inclusion_circles_enu)
+        problem.setExclusionPolygons(
+            TerrainPlanner.polyfences_polygon_to_enu(
+                self._grid_map_lat, self._grid_map_lon, self._exclusion_polygons
+            )
+        )
+        problem.setInclusionPolygons(
+            TerrainPlanner.polyfences_polygon_to_enu(
+                self._grid_map_lat, self._grid_map_lon, self._inclusion_polygons
+            )
+        )
+        problem.setExclusionCircles(
+            TerrainPlanner.polyfences_circle_to_enu(
+                self._grid_map_lat, self._grid_map_lon, self._exclusion_circles
+            )
+        )
+        problem.setInclusionCircles(
+            TerrainPlanner.polyfences_circle_to_enu(
+                self._grid_map_lat, self._grid_map_lon, self._inclusion_circles
+            )
+        )
 
         # adjust validity checking resolution
         resolution_requested = self._resolution / self._grid_length
@@ -1651,7 +1352,7 @@ class TerrainPlanner(multiproc.Process):
         self._lock.acquire()
 
         # calculate position (ENU)
-        (east, north) = TerrainNavModule.latlon_to_enu(
+        (east, north) = TerrainPlanner.latlon_to_enu(
             self._grid_map_lat, self._grid_map_lon, lat, lon
         )
 
@@ -1681,7 +1382,7 @@ class TerrainPlanner(multiproc.Process):
         self._lock.acquire()
 
         # calculate position (ENU)
-        (east, north) = TerrainNavModule.latlon_to_enu(
+        (east, north) = TerrainPlanner.latlon_to_enu(
             self._grid_map_lat, self._grid_map_lon, lat, lon
         )
 
@@ -1703,3 +1404,57 @@ class TerrainPlanner(multiproc.Process):
         self._pipe_send.send(PlannerGoalLatLon((lat, lon), self._goal_is_valid))
 
         self._lock.release()
+
+    @staticmethod
+    def latlon_to_enu(origin_lat, origin_lon, lat, lon):
+        distance = mp_util.gps_distance(origin_lat, origin_lon, lat, lon)
+        bearing_deg = mp_util.gps_bearing(origin_lat, origin_lon, lat, lon)
+        bearing_rad = math.radians(bearing_deg)
+        east = distance * math.sin(bearing_rad)
+        north = distance * math.cos(bearing_rad)
+        return (east, north)
+
+    @staticmethod
+    def polyfences_polygon_to_enu(origin_lat, origin_lon, polygons):
+        """
+        Convert polyfences polygones to ENU point polygons.
+
+        :param origin_lat: latitude of the grid map origin
+        :type origin_lat: float
+        :param origin_lon: longitude of the grid map origin
+        :type origin_lon: float
+        :param polygons: list of MAVLink polyfences
+        :return: list of polygons in ENU frame
+        :rtype" list[list[tuple[float, float]]]
+        """
+        polygons_enu = []
+        for polygon in polygons:
+            points_enu = []
+            for point in polygon:
+                lat = point.x
+                lon = point.y
+                if point.get_type() == "MISSION_ITEM_INT":
+                    lat *= 1e-7
+                    lon *= 1e-7
+                point_enu = TerrainPlanner.latlon_to_enu(
+                    origin_lat, origin_lon, lat, lon
+                )
+                points_enu.append(point_enu)
+            polygons_enu.append(points_enu)
+        return polygons_enu
+
+    @staticmethod
+    def polyfences_circle_to_enu(origin_lat, origin_lon, circles):
+        circles_enu = []
+        for circle in circles:
+            lat = circle.x
+            lon = circle.y
+            if circle.get_type() == "MISSION_ITEM_INT":
+                lat *= 1e-7
+                lon *= 1e-7
+            (east, north) = TerrainPlanner.latlon_to_enu(
+                origin_lat, origin_lon, lat, lon
+            )
+            radius = circle.param1
+            circles_enu.append((east, north, radius))
+        return circles_enu
