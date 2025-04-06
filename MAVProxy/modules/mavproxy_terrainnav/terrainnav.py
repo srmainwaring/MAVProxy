@@ -493,6 +493,8 @@ class TerrainNavModule(mp_module.MPModule):
 
         wp_module.wploader.clear()
         wp_module.wploader.expected_count = 0
+        if self.mpstate.master() is None:
+            return
         self.mpstate.master().waypoint_count_send(0)
         wp_module.loading_waypoints = True
 
