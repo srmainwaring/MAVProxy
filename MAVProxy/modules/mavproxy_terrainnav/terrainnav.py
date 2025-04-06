@@ -352,7 +352,10 @@ class TerrainNavModule(mp_module.MPModule):
         return map_module.mpstate.click_location
 
     def set_start(self):
-        (lat, lon) = self.get_map_click_location()
+        try:
+            (lat, lon) = self.get_map_click_location()
+        except TypeError:
+            return
         if lat is None or lon is None:
             return
 
