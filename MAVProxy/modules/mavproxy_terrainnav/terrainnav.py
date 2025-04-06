@@ -348,11 +348,15 @@ class TerrainNavModule(mp_module.MPModule):
         map_module = self.module("map")
         if map_module is None:
             return (None, None)
-
-        return map_module.mpstate.click_location
+        click_location = map_module.mpstate.click_location
+        if click_location is None:
+            return (None, None)
+        
+        return click_location
 
     def set_start(self):
         (lat, lon) = self.get_map_click_location()
+
         if lat is None or lon is None:
             return
 
