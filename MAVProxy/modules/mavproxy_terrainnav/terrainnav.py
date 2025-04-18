@@ -7,11 +7,14 @@ import sys
 import time
 import threading
 
+from functools import partial
+
 from MAVProxy.mavproxy import MPState
 
 from MAVProxy.modules.lib import multiproc
 from MAVProxy.modules.lib import mp_module
 from MAVProxy.modules.lib import mp_settings
+from MAVProxy.modules.lib.mp_settings import MPSetting
 from MAVProxy.modules.lib import mp_util
 
 from MAVProxy.modules.mavproxy_map import mp_slipmap
@@ -21,38 +24,53 @@ from MAVProxy.modules.mavproxy_terrainnav import terrainnav_msgs
 
 if mp_util.has_wxpython:
     from MAVProxy.modules.lib.mp_menu import MPMenuSubMenu
+    from MAVProxy.modules.lib.wxsettings import WXSettings
 
 from pymavlink import mavutil
+from pymavlink.rotmat import Vector3
 
 # terrain navigation
 from terrain_nav_py.dubins_airplane import DubinsAirplaneStateSpace
 from terrain_nav_py.grid_map import GridMapSRTM
 from terrain_nav_py.path import Path
+from terrain_nav_py.path_segment import PathSegment
 from terrain_nav_py.terrain_map import TerrainMap
 from terrain_nav_py.terrain_ompl_rrt import TerrainOmplRrt
 
 
 class TerrainNavModule(mp_module.MPModule):
+
+    # TODO: some of these settings should be extracted from params
+    @staticmethod
+    def default_settings():
+        return mp_settings.MPSettings(
+            [
+                MPSetting("loiter_agl_alt", float, 60.0),
+                MPSetting("loiter_radius", float, 60.0),  # WP_LOITER_RADIUS
+                MPSetting("turning_radius", float, 60.0),  # WP_LOITER_RADIUS
+                MPSetting("climb_angle_deg", float, 8.0),  # TECS_CLMB_MAX
+                MPSetting("max_agl_alt", float, 100.0),
+                MPSetting("min_agl_alt", float, 50.0),
+                MPSetting("grid_spacing", float, 30.0),
+                MPSetting("grid_length", float, 10000.0),
+                MPSetting("time_budget", float, 20.0),
+                MPSetting("resolution", float, 100.0),
+                MPSetting(
+                    "wp_generator",
+                    str,
+                    "UseLoiterToAlt",
+                    choice=["SimpleWaypoints", "UseLoiterToAlt"],
+                ),
+                MPSetting("wp_spacing", float, 60.0),
+                MPSetting("wp_min_loiter_angle_deg", float, 45.0),
+            ]
+        )
+
     def __init__(self, mpstate: MPState) -> None:
         super().__init__(mpstate, "terrainnav", "terrain navigation module")
 
-        # TODO: some of these settings should be extracted from params
         # *** planner settings ***
-        self.terrainnav_settings = mp_settings.MPSettings(
-            [
-                ("loiter_agl_alt", float, 60.0),
-                ("loiter_radius", float, 60.0),
-                ("turning_radius", float, 60.0),
-                ("climb_angle_deg", float, 8.0),
-                ("max_agl_alt", float, 100.0),
-                ("min_agl_alt", float, 50.0),
-                ("grid_spacing", float, 30.0),
-                ("grid_length", float, 10000.0),
-                ("time_budget", float, 20.0),
-                ("resolution", float, 100.0),
-                ("wp_spacing", float, 60.0),
-            ]
-        )
+        self.terrainnav_settings = TerrainNavModule.default_settings()
 
         # *** commands ***
         cmdname = "terrainnav"
@@ -105,6 +123,9 @@ class TerrainNavModule(mp_module.MPModule):
         self._grid_map_lon = None
         self._candidate_path = None
 
+        self.start_latlon = None
+        self.goal_latlon = None
+
         # *** slip map state ***
         self._map_layer_initialised = False
         self._map_layer_id = "terrainnav"
@@ -119,12 +140,16 @@ class TerrainNavModule(mp_module.MPModule):
         # *** fence state ***
         self._fence_change_time = 0
 
-        # *** multiprocessing ***
+        # *** planner multiprocessing ***
         self._planner_process = None
         self._parent_pipe_recv, self._planner_pipe_send = multiproc.Pipe(duplex=False)
         self._planner_pipe_recv, self._parent_pipe_send = multiproc.Pipe(duplex=False)
         self._planner_close_event = multiproc.Event()
         self._planner_close_event.clear()
+
+        # *** planner settings callback - needs pipe ***
+        setting_cb = partial(TerrainNavModule.setting_callback, self._parent_pipe_send)
+        self.terrainnav_settings.set_callback(setting_cb)
 
         self.start_planner()
 
@@ -184,48 +209,10 @@ class TerrainNavModule(mp_module.MPModule):
             print(usage)
 
     def cmd_set(self, args):
+        """
+        Modify a setting
+        """
         self.terrainnav_settings.command(args[1:])
-
-        if len(args) < 2:
-            return
-
-        # TODO: find more compact way to ensure all settings are sent to planner
-        if args[1] == "loiter_agl_alt":
-            self._parent_pipe_send.send(
-                PlannerLoiterAglAlt(self.terrainnav_settings.loiter_agl_alt)
-            )
-        elif args[1] == "loiter_radius":
-            self._parent_pipe_send.send(
-                PlannerLoiterRadius(self.terrainnav_settings.loiter_radius)
-            )
-        elif args[1] == "turning_radius":
-            self._parent_pipe_send.send(
-                PlannerTurningRadius(self.terrainnav_settings.turning_radius)
-            )
-        elif args[1] == "climb_angle_deg":
-            self._parent_pipe_send.send(
-                PlannerClimbAngleDeg(self.terrainnav_settings.climb_angle_deg)
-            )
-        elif args[1] == "max_agl_alt":
-            self._parent_pipe_send.send(
-                PlannerMaxAglAlt(self.terrainnav_settings.max_agl_alt)
-            )
-        elif args[1] == "min_agl_alt":
-            self._parent_pipe_send.send(
-                PlannerMinAglAlt(self.terrainnav_settings.min_agl_alt)
-            )
-        elif args[1] == "grid_spacing":
-            self._parent_pipe_send.send(
-                PlannerGridSpacing(self.terrainnav_settings.grid_spacing)
-            )
-        elif args[1] == "grid_length":
-            self._parent_pipe_send.send(
-                PlannerGridLength(self.terrainnav_settings.grid_length)
-            )
-        elif args[1] == "time_budget":
-            self._parent_pipe_send.send(
-                PlannerTimeBudget(self.terrainnav_settings.time_budget)
-            )
 
     # TODO: review various `clear_xxx`` options
     def cmd_clear(self, args):
@@ -251,7 +238,7 @@ class TerrainNavModule(mp_module.MPModule):
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
                 self._parent_pipe_send.send(PlannerCmdRunPlanner())
             elif isinstance(msg, terrainnav_msgs.GenWaypoints):
-                self.gen_waypoints()
+                self.generate_waypoints()
             elif isinstance(msg, terrainnav_msgs.ClearPath):
                 self.clear_path()
             elif isinstance(msg, terrainnav_msgs.ClearWaypoints):
@@ -287,6 +274,8 @@ class TerrainNavModule(mp_module.MPModule):
                 self.hide_planner_boundary()
             elif isinstance(msg, terrainnav_msgs.MoveBoundary):
                 self.move_planner_boundary()
+            elif isinstance(msg, terrainnav_msgs.Settings):
+                self.settings_dialog()
             else:
                 # TODO: raise an exception
                 if self.is_debug:
@@ -302,6 +291,13 @@ class TerrainNavModule(mp_module.MPModule):
                         f"[terrainnav] PlannerStartLatLon: {msg.start_latlon}, "
                         f"is_valid: {msg.is_valid}"
                     )
+
+                # validated start location
+                if msg.is_valid:
+                    self.start_latlon = msg.start_latlon
+                else:
+                    self.start_latlon = None
+
                 (lat, lon) = msg.start_latlon
                 self.draw_start(lat, lon, msg.is_valid)
             elif isinstance(msg, PlannerGoalLatLon):
@@ -310,6 +306,13 @@ class TerrainNavModule(mp_module.MPModule):
                         f"[terrainnav] PlannerGoalLatLon: {msg.goal_latlon}, "
                         f"is_valid: {msg.is_valid}"
                     )
+
+                # validated goal location
+                if msg.is_valid:
+                    self.goal_latlon = msg.goal_latlon
+                else:
+                    self.goal_latlon = None
+
                 (lat, lon) = msg.goal_latlon
                 self.draw_goal(lat, lon, msg.is_valid)
             elif isinstance(msg, PlannerStatus):
@@ -407,6 +410,41 @@ class TerrainNavModule(mp_module.MPModule):
             self.show_planner_boundary()
 
         self._parent_pipe_send.send(PlannerGridLatLon((lat, lon)))
+
+    @staticmethod
+    def setting_callback(pipe, setting):
+        """
+        Called when a setting is updated
+
+        :param pipe: pipe used to send setting to the planner
+        :type pipe: multiproc.Pipe
+        :param setting: the setting that has changed
+        :type setting: MPSetting
+        """
+        if setting.name == "loiter_agl_alt":
+            pipe.send(PlannerLoiterAglAlt(setting.value))
+        elif setting.name == "loiter_radius":
+            pipe.send(PlannerLoiterRadius(setting.value))
+        elif setting.name == "turning_radius":
+            pipe.send(PlannerTurningRadius(setting.value))
+        elif setting.name == "climb_angle_deg":
+            pipe.send(PlannerClimbAngleDeg(setting.value))
+        elif setting.name == "max_agl_alt":
+            pipe.send(PlannerMaxAglAlt(setting.value))
+        elif setting.name == "min_agl_alt":
+            pipe.send(PlannerMinAglAlt(setting.value))
+        elif setting.name == "grid_spacing":
+            pipe.send(PlannerGridSpacing(setting.value))
+        elif setting.name == "grid_length":
+            pipe.send(PlannerGridLength(setting.value))
+        elif setting.name == "time_budget":
+            pipe.send(PlannerTimeBudget(setting.value))
+
+    def settings_dialog(self):
+        """
+        Open the settings dialog
+        """
+        WXSettings(self.terrainnav_settings)
 
     def draw_circle(self, id, lat, lon, radius, colour):
         map_module = self.module("map")
@@ -680,7 +718,178 @@ class TerrainNavModule(mp_module.MPModule):
             )
             map_module.map.add_object(slip_polygon)
 
-    def gen_waypoints(self):
+    def generate_waypoints(self):
+        wp_gen = self.terrainnav_settings.wp_generator
+        if wp_gen == "SimpleWaypoints":
+            self._wp_gen_simple_waypoints()
+        elif wp_gen == "UseLoiterToAlt":
+            self._wp_gen_use_loiter_to_alt()
+        else:
+            print(f"[terrainnav] invalid WP generator: {wp_gen}")
+
+    def _wp_gen_home(self, seq, home):
+        """
+        Create a waypoint for the home position (the first item in a mission)
+        """
+        p1 = 0.0  # hold
+        p2 = 0.0  # accept radius
+        p3 = 0.0  # pass radius
+        p4 = 0.0  # yaw at waypoint
+        mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+            target_system=self.mpstate.settings.target_system,
+            target_component=self.mpstate.settings.target_component,
+            seq=seq,
+            frame=home.frame,
+            command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+            current=0,
+            autocontinue=1,
+            param1=p1,
+            param2=p2,
+            param3=p3,
+            param4=p4,
+            x=home.x,
+            y=home.y,
+            z=home.z,
+        )
+        return mission_item
+
+    @staticmethod
+    def loiter_dir_enu(position, velocity, centre):
+        """
+        Calculate the loiter direction in ENU frame given a loiter centre
+        and position and velocity on the perimeter.
+
+        :param position: position on the loiter circle
+        :type position: Vector3
+        :param velocity: velocity on the loiter circle
+        :type velocity: Vector3
+        :param centre: centre of the loiter circle
+        :type centre: Vector3
+        :return: 1 for CCW and -1 for CW
+        """
+        cen_2d = Vector3(centre.x, centre.y, 0.0)
+        pos_2d = Vector3(position.x, position.y, 0.0)
+        tan_2d = Vector3(velocity.x, velocity.y, 0.0).normalized()
+        rad_2d = (pos_2d - cen_2d).normalized()
+        dir_3d = rad_2d % tan_2d
+        loiter_dir = -1.0 if dir_3d.z < 0.0 else 1.0
+        return loiter_dir
+
+    def _wp_gen_start_loiter(self, seq):
+        """
+        Create a waypoint for the start loiter.
+
+        :param seq: mission item sequence assigned to this waypoint
+        :type seq: int
+        :return: A MAVLink mission item
+        """
+        path = self._candidate_path
+        map_lat = self._grid_map_lat
+        map_lon = self._grid_map_lon
+
+        if path is None or map_lat is None or map_lon is None:
+            return
+
+        terrain_module = self.module("terrain")
+        if terrain_module is None:
+            return None
+        elevation_model = terrain_module.ElevationModel
+
+        if self.start_latlon is None:
+            return None
+        (wp_lat, wp_lon) = self.start_latlon
+
+        # calculate the loiter direction
+        (start_x, start_y) = TerrainPlanner.latlon_to_enu(
+            map_lat, map_lon, wp_lat, wp_lon
+        )
+        state = path.first_segment().first_state()
+        loiter_dir_frd = -1.0 * TerrainNavModule.loiter_dir_enu(
+            state.position, state.velocity, Vector3(start_x, start_y, 0.0)
+        )
+
+        ter_alt = elevation_model.GetElevation(wp_lat, wp_lon)
+        wp_alt = ter_alt + self.terrainnav_settings.loiter_agl_alt
+        p1 = 1.0  # heading required: 0: no, 1: yes
+        p2 = loiter_dir_frd * self.terrainnav_settings.loiter_radius  # radius
+        p3 = 0.0
+        p4 = 1.0  # loiter exit location: 1: line between exit and next wp.
+        mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+            target_system=self.mpstate.settings.target_system,
+            target_component=self.mpstate.settings.target_component,
+            seq=seq,
+            frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+            command=mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT,
+            current=0,
+            autocontinue=1,
+            param1=p1,
+            param2=p2,
+            param3=p3,
+            param4=p4,
+            x=wp_lat,
+            y=wp_lon,
+            z=wp_alt,
+        )
+        return mission_item
+
+    def _wp_gen_goal_loiter(self, seq):
+        """
+        Create a waypoint for the goal loiter.
+
+        :param seq: mission item sequence assigned to this waypoint
+        :type seq: int
+        :return: A MAVLink mission item
+        """
+        path = self._candidate_path
+        map_lat = self._grid_map_lat
+        map_lon = self._grid_map_lon
+
+        if path is None or map_lat is None or map_lon is None:
+            return
+
+        terrain_module = self.module("terrain")
+        if terrain_module is None:
+            return None
+        elevation_model = terrain_module.ElevationModel
+
+        if self.goal_latlon is None:
+            return None
+        (wp_lat, wp_lon) = self.goal_latlon
+
+        # calculate the loiter direction
+        (start_x, start_y) = TerrainPlanner.latlon_to_enu(
+            map_lat, map_lon, wp_lat, wp_lon
+        )
+        state = path.last_segment().last_state()
+        loiter_dir_frd = -1.0 * TerrainNavModule.loiter_dir_enu(
+            state.position, state.velocity, Vector3(start_x, start_y, 0.0)
+        )
+
+        ter_alt = elevation_model.GetElevation(wp_lat, wp_lon)
+        wp_alt = ter_alt + self.terrainnav_settings.loiter_agl_alt
+        p1 = 0.0  # empty
+        p2 = 0.0  # empty
+        p3 = loiter_dir_frd * self.terrainnav_settings.loiter_radius  # radius
+        p4 = float("nan")  # desired yaw angle
+        mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+            target_system=self.mpstate.settings.target_system,
+            target_component=self.mpstate.settings.target_component,
+            seq=seq,
+            frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+            command=mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM,
+            current=0,
+            autocontinue=1,
+            param1=p1,
+            param2=p2,
+            param3=p3,
+            param4=p4,
+            x=wp_lat,
+            y=wp_lon,
+            z=wp_alt,
+        )
+        return mission_item
+
+    def _wp_gen_simple_waypoints(self):
         path = self._candidate_path
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
@@ -692,15 +901,41 @@ class TerrainNavModule(mp_module.MPModule):
         if wp_module is None:
             return
 
-        # TODO: provide accessors on Path  - fix upstream
-        # TODO: dt is not set - fix upstream
+        home = wp_module.get_home()
+        if home is None:
+            return
+
+        # target system and component for mission items
+        sys_id = self.mpstate.settings.target_system
+        cmp_id = self.mpstate.settings.target_component
+
+        mission_items = []
+        wp_num = 0
+
+        add_home = True
+        add_start_loiter = True
+        add_goal_loiter = True
+
+        if add_home:
+            mission_item = self._wp_gen_home(wp_num, home)
+            if mission_item is not None:
+                mission_items.append(mission_item)
+                wp_num += 1
+
+        if add_start_loiter:
+            mission_item = self._wp_gen_start_loiter(wp_num)
+            if mission_item is not None:
+                mission_items.append(mission_item)
+                wp_num += 1
+
+        # sample waypoints along the path
         wp_spacing = self.terrainnav_settings.wp_spacing
         wp_num_total = 0
         wp_positions = []
         for i, segment in enumerate(path._segments):
             count = segment.state_count()
-            # dt = segment.dt
             length = segment.get_length()
+            # dt = segment.dt
             dt = length / count
             wp_num = max(int(length / wp_spacing), 1)
             stride = count // wp_num
@@ -719,48 +954,220 @@ class TerrainNavModule(mp_module.MPModule):
                     f"wp_num: {wp_num}, wp_num_total: {wp_num_total}, stride: {stride}"
                 )
 
-        # prepare waypoints for load
-        wp_module.wploader.clear()
-        wp_module.wploader.expected_count = len(wp_positions)
-        self.mpstate.master().waypoint_count_send(len(wp_positions))
-
         # convert positions [(east, north, alt)] to locations [(lat, lon, alt)]
-        for seq, pos in enumerate(wp_positions):
+        for i, pos in enumerate(wp_positions):
             east = pos.x
             north = pos.y
             wp_alt = pos.z
             (wp_lat, wp_lon) = mp_util.gps_offset(map_lat, map_lon, east, north)
 
-            if self.module("terrain") is not None:
+            if self.is_debug and self.module("terrain") is not None:
                 elevation_model = self.module("terrain").ElevationModel
                 ter_alt = elevation_model.GetElevation(wp_lat, wp_lon)
                 agl_alt = wp_alt - ter_alt
-                if self.is_debug:
-                    print(
-                        f"[terrainnav] "
-                        f"wp: {seq}, east: {east:.2f}, north: {north:.2f}, "
-                        f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt: {wp_alt:.2f}, "
-                        f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
+                print(
+                    f"[terrainnav] "
+                    f"wp: {wp_num}, east: {east:.2f}, north: {north:.2f}, "
+                    f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt: {wp_alt:.2f}, "
+                    f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
+                )
+
+            pass_radius = 0.0
+
+            # mission item MAV_CMD_NAV_WAYPOINT (16)
+            p1 = 0.0  # hold
+            p2 = 0.0  # accept radius
+            p3 = 0.0  # pass_radius # pass radius - not working?
+            p4 = 0.0  # end_yaw_deg # yaw at waypoint - not working?
+            mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+                target_system=sys_id,
+                target_component=cmp_id,
+                seq=wp_num,
+                frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+                command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                current=0,
+                autocontinue=1,
+                param1=p1,
+                param2=p2,
+                param3=p3,
+                param4=p4,
+                x=wp_lat,
+                y=wp_lon,
+                z=wp_alt,
+            )
+            mission_items.append(mission_item)
+            wp_num += 1
+
+        if add_goal_loiter:
+            mission_item = self._wp_gen_goal_loiter(wp_num)
+            if mission_item is not None:
+                mission_items.append(mission_item)
+                wp_num += 1
+
+        # prepare waypoints for load
+        wp_module.wploader.clear()
+        wp_module.wploader.expected_count = len(mission_items)
+        self.mpstate.master().waypoint_count_send(len(mission_items))
+        for w in mission_items:
+            wp_module.wploader.add(w)
+            wsend = wp_module.wploader.wp(w.seq)
+            if self.mpstate.settings.wp_use_mission_int:
+                wsend = wp_module.wp_to_mission_item_int(w)
+            self.mpstate.master().mav.send(wsend)
+
+            # tell the wp module to expect some waypoints
+            wp_module.loading_waypoints = True
+
+    def _wp_gen_use_loiter_to_alt(self):
+        path = self._candidate_path
+        map_lat = self._grid_map_lat
+        map_lon = self._grid_map_lon
+
+        if path is None or map_lat is None or map_lon is None:
+            return
+
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+
+        home = wp_module.get_home()
+        if home is None:
+            return
+
+        # target system and component for mission items
+        sys_id = self.mpstate.settings.target_system
+        cmp_id = self.mpstate.settings.target_component
+
+        mission_items = []
+        wp_num = 0
+
+        add_home = True
+        add_start_loiter = True
+        add_goal_loiter = True
+
+        if add_home:
+            mission_item = self._wp_gen_home(wp_num, home)
+            if mission_item is not None:
+                mission_items.append(mission_item)
+                wp_num += 1
+
+        if add_start_loiter:
+            mission_item = self._wp_gen_start_loiter(wp_num)
+            if mission_item is not None:
+                mission_items.append(mission_item)
+                wp_num += 1
+
+        # add path mission items
+        for i, segment in enumerate(path._segments):
+            position3 = segment.first_state().position
+            tangent3 = (segment.first_state().velocity).normalized()
+            curvature = segment.curvature
+            position2 = Vector3(position3.x, position3.y, 0.0)
+            tangent2 = Vector3(tangent3.x, tangent3.y, 0.0)
+
+            start_alt = segment.first_state().position.z
+
+            (end_lat, end_lon) = mp_util.gps_offset(
+                map_lat,
+                map_lon,
+                segment.last_state().position.x,
+                segment.last_state().position.y,
+            )
+            end_alt = segment.last_state().position.z
+            end_yaw_deg = math.degrees(segment.last_state().attitude.euler[2])
+
+            segment_delta_alt = end_alt - start_alt
+            segment_length = segment.get_length()
+            segment_gamma = math.atan2(segment_delta_alt, segment_length)
+            segment_gamma_deg = math.degrees(segment_gamma)
+
+            if self.is_debug:
+                print(
+                    f"[terrainnav] "
+                    f"[{wp_num}] delta_alt: {segment_delta_alt:.2f}, "
+                    f"length: {segment_length:.2f}, gamma_deg: {segment_gamma_deg:.2f}"
+                )
+
+            pass_radius = 0.0
+            if curvature != 0.0:
+                # curvature in ENU, CCW is negative, CW is positive
+                pass_radius = 1.0 if curvature < 0 else -1.0
+
+                # do not add a loiter for short turns
+                radius = 1.0 / math.fabs(curvature)
+                phi = segment_length / radius
+                min_phi = math.radians(self.terrainnav_settings.wp_min_loiter_angle_deg)
+
+                if phi >= min_phi:
+                    arc_centre = PathSegment.get_arc_centre(
+                        position2, tangent2, curvature
+                    )
+                    (cen_lat, cen_lon) = mp_util.gps_offset(
+                        map_lat,
+                        map_lon,
+                        arc_centre.x,
+                        arc_centre.y,
                     )
 
-            # NOTE: mission_editor.py me_event.MEE_WRITE_WP_NUM
-            w = mavutil.mavlink.MAVLink_mission_item_message(
-                self.mpstate.settings.target_system,
-                self.mpstate.settings.target_component,
-                seq,  # seq
-                mavutil.mavlink.MAV_FRAME_GLOBAL,  # frame
-                mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,  # command
-                0,  # current
-                1,  # autocontinue
-                0.0,  # param1,
-                0.0,  # param2,
-                0.0,  # param3
-                0.0,  # param4
-                wp_lat,  # x (latitude)
-                wp_lon,  # y (longitude)
-                wp_alt,  # z (altitude)
-            )
+                    # MAV_CMD_NAV_LOITER_TO_ALT (31)
+                    p1 = 1.0  # heading required: 0: no, 1: yes
+                    p2 = -1.0 / curvature  # radius: > 0 loiter CW, < 0 loiter CCW
+                    p3 = 0.0
+                    p4 = 1.0  # loiter exit location: 1: line between exit and next wp.
+                    mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+                        target_system=sys_id,
+                        target_component=cmp_id,
+                        seq=wp_num,
+                        frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+                        command=mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT,
+                        current=0,
+                        autocontinue=1,
+                        param1=p1,
+                        param2=p2,
+                        param3=p3,
+                        param4=p4,
+                        x=cen_lat,
+                        y=cen_lon,
+                        z=end_alt,
+                    )
+                    mission_items.append(mission_item)
+                    wp_num += 1
+            else:
+                # mission item MAV_CMD_NAV_WAYPOINT (16)
+                p1 = 0.0  # hold
+                p2 = 0.0  # accept radius
+                p3 = 0.0  # pass_radius # pass radius - not working?
+                p4 = 0.0  # end_yaw_deg # yaw at waypoint - not working?
+                mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+                    target_system=sys_id,
+                    target_component=cmp_id,
+                    seq=wp_num,
+                    frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+                    command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                    current=0,
+                    autocontinue=1,
+                    param1=p1,
+                    param2=p2,
+                    param3=p3,
+                    param4=p4,
+                    x=end_lat,
+                    y=end_lon,
+                    z=end_alt,
+                )
+                mission_items.append(mission_item)
+                wp_num += 1
 
+        if add_goal_loiter:
+            mission_item = self._wp_gen_goal_loiter(wp_num)
+            if mission_item is not None:
+                mission_items.append(mission_item)
+                wp_num += 1
+
+        # prepare waypoints for load
+        wp_module.wploader.clear()
+        wp_module.wploader.expected_count = len(mission_items)
+        self.mpstate.master().waypoint_count_send(len(mission_items))
+        for w in mission_items:
             wp_module.wploader.add(w)
             wsend = wp_module.wploader.wp(w.seq)
             if self.mpstate.settings.wp_use_mission_int:
@@ -1196,8 +1603,6 @@ class TerrainPlanner(multiproc.Process):
         # if self.is_debug:
         #     print(f"[TerrainPlanner] calculating distance-surface...", end="")
         # self._grid_map.addLayerDistanceTransform(surface_distance=self.terrainnav_settings.min_agl_alt)
-        # if self.is_debug:
-        #     print(f"done.")
 
         self._terrain_map = TerrainMap()
         self._terrain_map.setGridMap(self._grid_map)
@@ -1275,12 +1680,6 @@ class TerrainPlanner(multiproc.Process):
         # adjust validity checking resolution
         resolution_requested = self._resolution / self._grid_length
         problem.setStateValidityCheckingResolution(resolution_requested)
-
-        # TODO: enable debug - will need message from mddule
-        # if self.is_debug:
-        #     si = problem.getSpaceInformation()
-        #     resolution_used = si.getStateValidityCheckingResolution()
-        #     print(f"[TerrainPlanner] resolution used: {resolution_used}")
 
         self._lock.release()
 
