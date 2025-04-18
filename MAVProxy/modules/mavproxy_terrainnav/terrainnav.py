@@ -23,11 +23,14 @@ if mp_util.has_wxpython:
     from MAVProxy.modules.lib.mp_menu import MPMenuSubMenu
 
 from pymavlink import mavutil
+from pymavlink.quaternion import Quaternion
+from pymavlink.rotmat import Vector3
 
 # terrain navigation
 from terrain_nav_py.dubins_airplane import DubinsAirplaneStateSpace
 from terrain_nav_py.grid_map import GridMapSRTM
 from terrain_nav_py.path import Path
+from terrain_nav_py.path_segment import PathSegment
 from terrain_nav_py.terrain_map import TerrainMap
 from terrain_nav_py.terrain_ompl_rrt import TerrainOmplRrt
 
@@ -41,9 +44,9 @@ class TerrainNavModule(mp_module.MPModule):
         self.terrainnav_settings = mp_settings.MPSettings(
             [
                 ("loiter_agl_alt", float, 60.0),
-                ("loiter_radius", float, 60.0),
-                ("turning_radius", float, 60.0),
-                ("climb_angle_deg", float, 8.0),
+                ("loiter_radius", float, 60.0),  # WP_LOITER_RADIUS
+                ("turning_radius", float, 60.0),  # WP_LOITER_RADIUS
+                ("climb_angle_deg", float, 8.0),  # TECS_CLMB_MAX
                 ("max_agl_alt", float, 100.0),
                 ("min_agl_alt", float, 50.0),
                 ("grid_spacing", float, 30.0),
@@ -51,6 +54,7 @@ class TerrainNavModule(mp_module.MPModule):
                 ("time_budget", float, 20.0),
                 ("resolution", float, 100.0),
                 ("wp_spacing", float, 60.0),
+                ("wp_min_loiter_angle_deg", float, 45.0),
             ]
         )
 
@@ -119,7 +123,7 @@ class TerrainNavModule(mp_module.MPModule):
         # *** fence state ***
         self._fence_change_time = 0
 
-        # *** multiprocessing ***
+        # *** planner multiprocessing ***
         self._planner_process = None
         self._parent_pipe_recv, self._planner_pipe_send = multiproc.Pipe(duplex=False)
         self._planner_pipe_recv, self._parent_pipe_send = multiproc.Pipe(duplex=False)
@@ -681,6 +685,11 @@ class TerrainNavModule(mp_module.MPModule):
             map_module.map.add_object(slip_polygon)
 
     def gen_waypoints(self):
+        # TODO: add switch
+        # self.gen_waypoints1()
+        self.gen_waypoints2()
+
+    def gen_waypoints1(self):
         path = self._candidate_path
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
@@ -692,7 +701,7 @@ class TerrainNavModule(mp_module.MPModule):
         if wp_module is None:
             return
 
-        # TODO: provide accessors on Path  - fix upstream
+        # TODO: provide accessors on Path - fix upstream
         # TODO: dt is not set - fix upstream
         wp_spacing = self.terrainnav_settings.wp_spacing
         wp_num_total = 0
@@ -761,6 +770,138 @@ class TerrainNavModule(mp_module.MPModule):
                 wp_alt,  # z (altitude)
             )
 
+            wp_module.wploader.add(w)
+            wsend = wp_module.wploader.wp(w.seq)
+            if self.mpstate.settings.wp_use_mission_int:
+                wsend = wp_module.wp_to_mission_item_int(w)
+            self.mpstate.master().mav.send(wsend)
+
+            # tell the wp module to expect some waypoints
+            wp_module.loading_waypoints = True
+
+    def gen_waypoints2(self):
+        path = self._candidate_path
+        map_lat = self._grid_map_lat
+        map_lon = self._grid_map_lon
+
+        if path is None or map_lat is None or map_lon is None:
+            return
+
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+
+        # TODO: provide accessors on Path - see gen_waypoints
+        mission_items = []
+        wp_num = 0
+        for i, segment in enumerate(path._segments):
+            position3 = segment.first_state().position
+            tangent3 = (segment.first_state().velocity).normalized()
+            curvature = segment.curvature
+            position2 = Vector3(position3.x, position3.y, 0.0)
+            tangent2 = Vector3(tangent3.x, tangent3.y, 0.0)
+
+            start_alt = segment.first_state().position.z
+
+            (end_lat, end_lon) = mp_util.gps_offset(
+                map_lat,
+                map_lon,
+                segment.last_state().position.x,
+                segment.last_state().position.y,
+            )
+            end_alt = segment.last_state().position.z
+            end_yaw_deg = math.degrees(segment.last_state().attitude.euler[2])
+
+            segment_delta_alt = end_alt - start_alt
+            segment_length = segment.get_length()
+            segment_gamma = math.asin(segment_delta_alt / segment_length)
+            segment_gamma_deg = math.degrees(segment_gamma)
+            # TODO: remove debug print
+            # print(
+            #     f"[{wp_num}] delta_alt: {segment_delta_alt}, "
+            #     f"length: {segment_length}, gamma_deg: {segment_gamma_deg}"
+            # )
+
+            # waypoint number - should also include home position
+            sys_id = self.mpstate.settings.target_system
+            cmp_id = self.mpstate.settings.target_component
+            pass_radius = 0.0
+            if curvature != 0.0:
+                # curvature in ENU, CCW is negative, CW is positive
+                pass_radius = 1.0 if curvature < 0 else -1.0
+
+                # do not add a loiter for short turns
+                radius = 1.0 / math.fabs(curvature)
+                phi = segment_length / radius
+                min_phi = math.radians(self.terrainnav_settings.wp_min_loiter_angle_deg)
+
+                if phi >= min_phi:
+                    arc_centre = PathSegment.get_arc_centre(
+                        position2, tangent2, curvature
+                    )
+                    (cen_lat, cen_lon) = mp_util.gps_offset(
+                        map_lat,
+                        map_lon,
+                        arc_centre.x,
+                        arc_centre.y,
+                    )
+
+                    # MAV_CMD_NAV_LOITER_TO_ALT (31)
+                    p1 = 1.0  # heading required: 0: no, 1: yes
+                    p2 = -1.0 / curvature  # radius: > 0 loiter CW, < 0 loiter CCW
+                    p3 = 0.0
+                    p4 = 1.0  # loiter exit location: 1: line between exit and next wp.
+                    mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+                        target_system=sys_id,
+                        target_component=cmp_id,
+                        seq=wp_num,
+                        frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+                        command=mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT,
+                        current=0,
+                        autocontinue=1,
+                        param1=p1,
+                        param2=p2,
+                        param3=p3,
+                        param4=p4,
+                        x=cen_lat,
+                        y=cen_lon,
+                        z=end_alt,
+                    )
+                    # TODO: remove debug print
+                    # print(mission_item)
+                    mission_items.append(mission_item)
+                    wp_num += 1
+
+            # mission item MAV_CMD_NAV_WAYPOINT (16)
+            p1 = 0.0  # hold
+            p2 = 0.0  # accept radius
+            p3 = 0.0  # pass_radius # pass radius - not working?
+            p4 = 0.0  # end_yaw_deg # yaw at waypoint - not working?
+            mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+                target_system=sys_id,
+                target_component=cmp_id,
+                seq=wp_num,
+                frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+                command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+                current=0,
+                autocontinue=1,
+                param1=p1,
+                param2=p2,
+                param3=p3,
+                param4=p4,
+                x=end_lat,
+                y=end_lon,
+                z=end_alt,
+            )
+            print(mission_item)
+            mission_items.append(mission_item)
+            wp_num += 1
+
+        # prepare waypoints for load
+        wp_module.wploader.clear()
+        wp_module.wploader.expected_count = len(mission_items)
+        self.mpstate.master().waypoint_count_send(len(mission_items))
+        for w in mission_items:
             wp_module.wploader.add(w)
             wsend = wp_module.wploader.wp(w.seq)
             if self.mpstate.settings.wp_use_mission_int:
