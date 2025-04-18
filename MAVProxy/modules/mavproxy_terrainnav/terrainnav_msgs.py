@@ -91,3 +91,7 @@ class ClearPath:
 class ClearWaypoints:
     def __init__(self):
         pass
+
+class Settings:
+    def __init__(self):
+        pass

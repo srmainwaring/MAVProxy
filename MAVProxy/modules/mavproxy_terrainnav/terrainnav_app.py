@@ -44,7 +44,7 @@ class TerrainNavApp:
         # create the wx application and pass self as the state
         app = wx.App()
         app.frame = terrainnav_ui.TerrainNavFrame(
-            state=self, title=self.title, size=(360, 300)
+            state=self, title=self.title, size=(460, 340)
         )
         app.frame.SetDoubleBuffered(True)
         app.frame.Show()
@@ -111,6 +111,8 @@ if __name__ == "__main__":
     """
     multiproc.freeze_support()
     app = TerrainNavApp(title="Terrain Navigation")
+    app.start_ui()
+
     while app.ui_is_alive():
         print("terrain navigation app is alive")
-        time.sleep(0.5)
+        time.sleep(0.1)
