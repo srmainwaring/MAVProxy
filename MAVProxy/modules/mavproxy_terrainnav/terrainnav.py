@@ -135,6 +135,7 @@ class TerrainNavModule(mp_module.MPModule):
         self._map_states_id = "terrainnav states"
         self._map_boundary_id = "terrainnav boundary"
         self._map_circle_linewidth = 2
+        self._planner_boundary_linewidth = 1
         self._is_boundary_visible = False
 
         # *** fence state ***
@@ -489,7 +490,7 @@ class TerrainNavModule(mp_module.MPModule):
                 self._map_boundary_id,
                 polygon,
                 layer=self._map_layer_id,
-                linewidth=1,
+                linewidth=self._planner_boundary_linewidth,
                 colour=colour,
                 showcircles=False,
                 showlines=True,
