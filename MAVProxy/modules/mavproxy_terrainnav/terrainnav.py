@@ -447,6 +447,8 @@ class TerrainNavModule(mp_module.MPModule):
             pipe.send(tp.PlannerTerrainSource(setting.value))
         elif setting.name == "time_budget":
             pipe.send(tp.PlannerTimeBudget(setting.value))
+        elif setting.name == "resolution":
+            pipe.send(tp.PlannerResolution(setting.value))
 
     def settings_dialog(self):
         """
