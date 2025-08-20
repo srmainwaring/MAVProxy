@@ -63,6 +63,12 @@ class TerrainNavModule(mp_module.MPModule):
                 ),
                 MPSetting("wp_spacing", float, 60.0),
                 MPSetting("wp_min_loiter_angle_deg", float, 45.0),
+                MPSetting(
+                    "terrain_source",
+                    str,
+                    "SRTM1",
+                    choice=["SRTM1", "SRTM3"],
+                ),
             ]
         )
 
@@ -71,6 +77,12 @@ class TerrainNavModule(mp_module.MPModule):
 
         # *** planner settings ***
         self.terrainnav_settings = TerrainNavModule.default_settings()
+
+        # override default terrain source if the terrain module is loaded
+        terrain_module = self.module("terrain")
+        if terrain_module is not None:
+            elevation_model = terrain_module.ElevationModel
+            self.terrainnav_settings.terrain_source = elevation_model.database
 
         # *** commands ***
         cmdname = "terrainnav"
@@ -437,6 +449,8 @@ class TerrainNavModule(mp_module.MPModule):
             pipe.send(PlannerGridSpacing(setting.value))
         elif setting.name == "grid_length":
             pipe.send(PlannerGridLength(setting.value))
+        elif setting.name == "terrain_source":
+            pipe.send(PlannerTerrainSource(setting.value))
         elif setting.name == "time_budget":
             pipe.send(PlannerTimeBudget(setting.value))
 
@@ -592,6 +606,9 @@ class TerrainNavModule(mp_module.MPModule):
         )
         self._parent_pipe_send.send(
             PlannerGridLength(self.terrainnav_settings.grid_length)
+        )
+        self._parent_pipe_send.send(
+            PlannerTerrainSource(self.terrainnav_settings.terrain_source)
         )
         self._parent_pipe_send.send(
             PlannerTimeBudget(self.terrainnav_settings.time_budget)
@@ -1261,6 +1278,9 @@ class PlannerGridLength:
     def __init__(self, grid_length):
         self.grid_length = grid_length
 
+class PlannerTerrainSource:
+    def __init__(self, terrain_source):
+        self.terrain_source = terrain_source
 
 class PlannerTimeBudget:
     def __init__(self, time_budget):
@@ -1337,6 +1357,7 @@ class TerrainPlanner(multiproc.Process):
         self._min_agl_alt = 50.0
         self._grid_spacing = 30.0
         self._grid_length = 10000.0
+        self._terrain_source = "SRTM1"
         self._time_budget = 20.0
         self._resolution = 100.0
 
@@ -1474,6 +1495,8 @@ class TerrainPlanner(multiproc.Process):
                     self.on_grid_spacing(msg)
                 elif isinstance(msg, PlannerGridLength):
                     self.on_grid_length(msg)
+                elif isinstance(msg, PlannerTerrainSource):
+                    self.on_terrain_source(msg)
                 elif isinstance(msg, PlannerTimeBudget):
                     self.on_time_budget(msg)
                 elif isinstance(msg, PlannerResolution):
@@ -1562,6 +1585,13 @@ class TerrainPlanner(multiproc.Process):
         self._do_init_planner = True
         self._lock.release()
 
+    def on_terrain_source(self, msg):
+        self._lock.acquire()
+        self._terrain_source = msg.terrain_source
+        self._do_init_terrain_map = True
+        self._do_init_planner = True
+        self._lock.release()
+
     def on_time_budget(self, msg):
         self._lock.acquire()
         self._time_budget = msg.time_budget
@@ -1598,6 +1628,7 @@ class TerrainPlanner(multiproc.Process):
         )
         self._grid_map.setGridSpacing(self._grid_spacing)
         self._grid_map.setGridLength(self._grid_length)
+        self._grid_map.setTerrainSource(self._terrain_source)
 
         # TODO: set up distance layer (too slow in current version)
         # if self.is_debug:
