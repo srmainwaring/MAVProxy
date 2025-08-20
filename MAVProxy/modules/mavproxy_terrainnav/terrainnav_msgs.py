@@ -2,96 +2,104 @@
 Terrain Navigation messages
 """
 
+from dataclasses import dataclass
 
+
+@dataclass
 class SetStart:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class SetGoal:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class AddRally:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class AddWaypoint:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class RunPlanner:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class GenWaypoints:
-    def __init__(self):
-        pass
+    pass
 
+
+@dataclass
 class Hold:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class Navigate:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class Rollout:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class Abort:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class Return:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class ShowContours:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class HideContours:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class ShowBoundary:
-    def __init__(self):
-        pass
+    pass
 
 
+@dataclass
 class HideBoundary:
-    def __init__(self):
-        pass
+    pass
 
+
+@dataclass
 class MoveBoundary:
-    def __init__(self):
-        pass
+    pass
 
+
+@dataclass
 class ClearAll:
-    def __init__(self):
-        pass
+    pass
 
+
+@dataclass
 class ClearPath:
-    def __init__(self):
-        pass
+    pass
 
+
+@dataclass
 class ClearWaypoints:
-    def __init__(self):
-        pass
+    pass
 
+
+@dataclass
 class Settings:
-    def __init__(self):
-        pass
+    pass
