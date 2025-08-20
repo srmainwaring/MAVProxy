@@ -20,7 +20,6 @@ from MAVProxy.modules.mavproxy_map import mp_slipmap
 
 from MAVProxy.modules.mavproxy_terrainnav import terrainnav_app
 from MAVProxy.modules.mavproxy_terrainnav import terrainnav_msgs
-from MAVProxy.modules.mavproxy_terrainnav import terrainnav_planner as tp
 
 if mp_util.has_wxpython:
     from MAVProxy.modules.lib.mp_menu import MPMenuSubMenu
@@ -30,6 +29,7 @@ from pymavlink import mavutil
 from pymavlink.rotmat import Vector3
 
 from terrain_nav_py.path_segment import PathSegment
+from terrain_nav_py import terrain_planner as tp
 
 
 class TerrainNavModule(mp_module.MPModule):
