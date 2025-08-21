@@ -86,11 +86,6 @@ class MoveBoundary:
 
 
 @dataclass
-class ClearAll:
-    pass
-
-
-@dataclass
 class ClearPath:
     pass
 

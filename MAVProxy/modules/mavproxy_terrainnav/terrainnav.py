@@ -50,6 +50,12 @@ class TerrainNavModule(mp_module.MPModule):
                 MPSetting("time_budget", float, 20.0),
                 MPSetting("resolution", float, 100.0),
                 MPSetting(
+                    "terrain_source",
+                    str,
+                    "SRTM1",
+                    choice=["SRTM1", "SRTM3"],
+                ),
+                MPSetting(
                     "wp_generator",
                     str,
                     "UseLoiterToAlt",
@@ -57,12 +63,10 @@ class TerrainNavModule(mp_module.MPModule):
                 ),
                 MPSetting("wp_spacing", float, 60.0),
                 MPSetting("wp_min_loiter_angle_deg", float, 45.0),
-                MPSetting(
-                    "terrain_source",
-                    str,
-                    "SRTM1",
-                    choice=["SRTM1", "SRTM3"],
-                ),
+                MPSetting("wp_use_relative_alt", bool, True),
+                MPSetting("wp_add_home", bool, True),
+                MPSetting("wp_add_start_loiter", bool, True),
+                MPSetting("wp_add_goal_loiter", bool, True),
             ]
         )
 
@@ -249,8 +253,6 @@ class TerrainNavModule(mp_module.MPModule):
                 self.clear_path()
             elif isinstance(msg, terrainnav_msgs.ClearWaypoints):
                 self.clear_waypoints()
-            elif isinstance(msg, terrainnav_msgs.ClearAll):
-                self.clear_all()
             elif isinstance(msg, terrainnav_msgs.Hold):
                 if self.is_debug:
                     print("[terrainnav] Hold")
@@ -552,11 +554,6 @@ class TerrainNavModule(mp_module.MPModule):
         map_module.map.remove_object(self._map_start_id)
         map_module.map.remove_object(self._map_goal_id)
 
-    def clear_all(self):
-        self.clear_path()
-        self.clear_waypoints()
-        self.clear_start_goal()
-
     def start_planner(self):
         if self.is_planner_alive():
             return
@@ -829,8 +826,7 @@ class TerrainNavModule(mp_module.MPModule):
             state.position, state.velocity, Vector3(start_x, start_y, 0.0)
         )
 
-        # TODO: add to settings
-        use_relative_alt = True
+        use_relative_alt = self.terrainnav_settings.wp_use_relative_alt
 
         # TODO: check home.frame
         home_alt_amsl = home.z
@@ -908,8 +904,7 @@ class TerrainNavModule(mp_module.MPModule):
             state.position, state.velocity, Vector3(start_x, start_y, 0.0)
         )
 
-        # TODO: add to settings
-        use_relative_alt = True
+        use_relative_alt = self.terrainnav_settings.wp_use_relative_alt
 
         # TODO: check home.frame
         home_alt_amsl = home.z
@@ -969,28 +964,33 @@ class TerrainNavModule(mp_module.MPModule):
         mission_items = []
         wp_num = 0
 
-        # TODO: add to settings
-        use_relative_alt = True
-        add_home = True
-        add_start_loiter = True
-        add_goal_loiter = True
+        use_relative_alt = self.terrainnav_settings.wp_use_relative_alt
+        add_home = self.terrainnav_settings.wp_add_home
+        add_start_loiter = self.terrainnav_settings.wp_add_start_loiter
+        add_goal_loiter = self.terrainnav_settings.wp_add_goal_loiter
 
         # TODO: check home.frame
         home_alt_amsl = home.z
 
         if add_home:
+            if self.is_debug:
+                print("[terrainnav] adding home")
             mission_item = self._wp_gen_home(wp_num, home)
             if mission_item is not None:
                 mission_items.append(mission_item)
                 wp_num += 1
 
         if add_start_loiter:
+            if self.is_debug:
+                print("[terrainnav] adding start loiter")
             mission_item = self._wp_gen_start_loiter(wp_num)
             if mission_item is not None:
                 mission_items.append(mission_item)
                 wp_num += 1
 
         # sample waypoints along the path
+        if self.is_debug:
+            print("[terrainnav] adding waypoints")
         wp_spacing = self.terrainnav_settings.wp_spacing
         wp_num_total = 0
         wp_positions = []
@@ -1033,7 +1033,7 @@ class TerrainNavModule(mp_module.MPModule):
                     f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt_amsl: {wp_alt_amsl:.2f}, "
                     f"ter_alt_amsl: {ter_alt_amsl:.2f}, wp_alt_agl: {wp_alt_agl:.2f}"
                 )
-        
+
             if use_relative_alt:
                 wp_frame = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT
                 wp_alt = wp_alt_amsl - home_alt_amsl
@@ -1068,6 +1068,8 @@ class TerrainNavModule(mp_module.MPModule):
             wp_num += 1
 
         if add_goal_loiter:
+            if self.is_debug:
+                print("[terrainnav] adding goal loiter")
             mission_item = self._wp_gen_goal_loiter(wp_num)
             if mission_item is not None:
                 mission_items.append(mission_item)
@@ -1110,30 +1112,33 @@ class TerrainNavModule(mp_module.MPModule):
         mission_items = []
         wp_num = 0
 
-        # TODO: add wp generation settings to module
-        # MAV_FRAME_GLOBAL                amsl in WGS84 coordinate (WGS84 geoid)
-        # MAV_FRAME_GLOBAL_RELATIVE_ALT   relaive to HOME (WGS84 reference)
-        use_relative_alt = True
-        add_home = True
-        add_start_loiter = True
-        add_goal_loiter = True
+        use_relative_alt = self.terrainnav_settings.wp_use_relative_alt
+        add_home = self.terrainnav_settings.wp_add_home
+        add_start_loiter = self.terrainnav_settings.wp_add_start_loiter
+        add_goal_loiter = self.terrainnav_settings.wp_add_goal_loiter
 
         # TODO: check home.frame
         home_alt_amsl = home.z
 
         if add_home:
+            if self.is_debug:
+                print("[terrainnav] adding home")
             mission_item = self._wp_gen_home(wp_num, home)
             if mission_item is not None:
                 mission_items.append(mission_item)
                 wp_num += 1
 
         if add_start_loiter:
+            if self.is_debug:
+                print("[terrainnav] adding start loiter")
             mission_item = self._wp_gen_start_loiter(wp_num)
             if mission_item is not None:
                 mission_items.append(mission_item)
                 wp_num += 1
 
         # add path mission items
+        if self.is_debug:
+            print("[terrainnav] adding waypoints")
         for i, segment in enumerate(path._segments):
             position3 = segment.first_state().position
             tangent3 = (segment.first_state().velocity).normalized()
@@ -1242,6 +1247,8 @@ class TerrainNavModule(mp_module.MPModule):
                 wp_num += 1
 
         if add_goal_loiter:
+            if self.is_debug:
+                print("[terrainnav] adding goal loiter")
             mission_item = self._wp_gen_goal_loiter(wp_num)
             if mission_item is not None:
                 mission_items.append(mission_item)

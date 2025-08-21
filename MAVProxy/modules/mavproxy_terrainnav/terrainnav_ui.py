@@ -22,7 +22,9 @@ class TerrainNavFrame(wx.Frame):
         self._vert_sizer4 = wx.StaticBoxSizer(wx.VERTICAL, self)
         self._vert_sizer5 = wx.StaticBoxSizer(wx.VERTICAL, self)
         self._vert_sizer6 = wx.StaticBoxSizer(wx.VERTICAL, self)
-        self._vert_sizer7 = wx.StaticBoxSizer(wx.VERTICAL, self)
+
+        self._vert_sizer_pad1 = wx.StaticBoxSizer(wx.VERTICAL, self)
+        self._vert_sizer_pad2 = wx.StaticBoxSizer(wx.VERTICAL, self)
 
         # buttons
         button_size = (120, 25)
@@ -41,22 +43,14 @@ class TerrainNavFrame(wx.Frame):
         self._button_add_wp = wx.Button(
             location_box, id=wx.ID_ANY, label="Add Waypoint", size=button_size
         )
+
         # planning
         planning_box = self._vert_sizer2.GetStaticBox()
         self._button_run_planner = wx.Button(
             planning_box, id=wx.ID_ANY, label="Run Planner", size=button_size
         )
-        self._button_gen_waypoints = wx.Button(
-            planning_box, id=wx.ID_ANY, label="Gen Waypoints", size=button_size
-        )
         self._button_clear_path = wx.Button(
             planning_box, id=wx.ID_ANY, label="Clear Path", size=button_size
-        )
-        self._button_clear_waypoints = wx.Button(
-            planning_box, id=wx.ID_ANY, label="Clear Waypoints", size=button_size
-        )
-        self._button_clear_all = wx.Button(
-            planning_box, id=wx.ID_ANY, label="Clear All", size=button_size
         )
 
         # navigation actions
@@ -77,38 +71,45 @@ class TerrainNavFrame(wx.Frame):
             navigation_box, id=wx.ID_ANY, label="Return", size=button_size
         )
 
-        # terrain visualisation
-        terrain_box = self._vert_sizer4.GetStaticBox()
+        # visualisation
+        visualisation_box = self._vert_sizer4.GetStaticBox()
         self._button_show_contours = wx.Button(
-            terrain_box, id=wx.ID_ANY, label="Show Contours", size=button_size
+            visualisation_box, id=wx.ID_ANY, label="Show Contours", size=button_size
         )
         self._button_hide_contours = wx.Button(
-            terrain_box, id=wx.ID_ANY, label="Hide Contours", size=button_size
+            visualisation_box, id=wx.ID_ANY, label="Hide Contours", size=button_size
         )
-
-        # planner boundary (map extents)
         self._button_show_boundary = wx.Button(
-            terrain_box, id=wx.ID_ANY, label="Show Boundary", size=button_size
+            visualisation_box, id=wx.ID_ANY, label="Show Boundary", size=button_size
         )
         self._button_hide_boundary = wx.Button(
-            terrain_box, id=wx.ID_ANY, label="Hide Boundary", size=button_size
+            visualisation_box, id=wx.ID_ANY, label="Hide Boundary", size=button_size
         )
         self._button_move_boundary = wx.Button(
-            terrain_box, id=wx.ID_ANY, label="Move Boundary", size=button_size
+            visualisation_box, id=wx.ID_ANY, label="Move Boundary", size=button_size
         )
 
-        # setting entry boxes
-        settings_box = self._vert_sizer5.GetStaticBox()
+        # waypoint generation
+        wp_gen_box = self._vert_sizer5.GetStaticBox()
+        self._button_gen_waypoints = wx.Button(
+            wp_gen_box, id=wx.ID_ANY, label="Gen Waypoints", size=button_size
+        )
+        self._button_clear_waypoints = wx.Button(
+            wp_gen_box, id=wx.ID_ANY, label="Clear Waypoints", size=button_size
+        )
+
+        # settings
+        settings_box = self._vert_sizer6.GetStaticBox()
         self._button_settings = wx.Button(
             settings_box, id=wx.ID_ANY, label="Settings", size=button_size
         )
 
         # main panel horiz padding
-        horz_pad_1_box = self._vert_sizer6.GetStaticBox()
-        self._panel_horz_pad_1 = wx.Panel(horz_pad_1_box, id=wx.ID_ANY)
+        horz_pad1_box = self._vert_sizer_pad1.GetStaticBox()
+        self._panel_horz_pad1 = wx.Panel(horz_pad1_box, id=wx.ID_ANY)
 
-        horz_pad_2_box = self._vert_sizer7.GetStaticBox()
-        self._panel_horz_pad_2 = wx.Panel(horz_pad_2_box, id=wx.ID_ANY)
+        horz_pad2_box = self._vert_sizer_pad2.GetStaticBox()
+        self._panel_horz_pad2 = wx.Panel(horz_pad2_box, id=wx.ID_ANY)
 
         # disabled buttons - for future use
         self._button_add_rally.Disable()
@@ -127,12 +128,7 @@ class TerrainNavFrame(wx.Frame):
 
         # planning layout
         self._vert_sizer2.Add(self._button_run_planner, proportion=0, flag=wx.EXPAND)
-        self._vert_sizer2.Add(self._button_gen_waypoints, proportion=0, flag=wx.EXPAND)
         self._vert_sizer2.Add(self._button_clear_path, proportion=0, flag=wx.EXPAND)
-        self._vert_sizer2.Add(
-            self._button_clear_waypoints, proportion=0, flag=wx.EXPAND
-        )
-        self._vert_sizer2.Add(self._button_clear_all, proportion=0, flag=wx.EXPAND)
 
         # navigation layout
         self._vert_sizer3.Add(self._button_hold, proportion=0, flag=wx.EXPAND)
@@ -148,20 +144,27 @@ class TerrainNavFrame(wx.Frame):
         self._vert_sizer4.Add(self._button_hide_boundary, proportion=0, flag=wx.EXPAND)
         self._vert_sizer4.Add(self._button_move_boundary, proportion=0, flag=wx.EXPAND)
 
+        # waypoint generation layout
+        self._vert_sizer5.Add(self._button_gen_waypoints, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer5.Add(
+            self._button_clear_waypoints, proportion=0, flag=wx.EXPAND
+        )
+
         # settings layout
-        self._vert_sizer5.Add(self._button_settings, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer6.Add(self._button_settings, proportion=0, flag=wx.EXPAND)
 
         # main panel
         self._horz_sizer1 = wx.BoxSizer(wx.HORIZONTAL)
         self._horz_sizer1.Add(self._vert_sizer1, proportion=0, flag=wx.EXPAND)
         self._horz_sizer1.Add(self._vert_sizer2, proportion=0, flag=wx.EXPAND)
         self._horz_sizer1.Add(self._vert_sizer3, proportion=0, flag=wx.EXPAND)
-        self._horz_sizer1.Add(self._vert_sizer6, proportion=1, flag=wx.EXPAND)
+        self._horz_sizer1.Add(self._vert_sizer_pad1, proportion=1, flag=wx.EXPAND)
 
         self._horz_sizer2 = wx.BoxSizer(wx.HORIZONTAL)
         self._horz_sizer2.Add(self._vert_sizer4, proportion=0, flag=wx.EXPAND)
         self._horz_sizer2.Add(self._vert_sizer5, proportion=0, flag=wx.EXPAND)
-        self._horz_sizer2.Add(self._vert_sizer7, proportion=1, flag=wx.EXPAND)
+        self._horz_sizer2.Add(self._vert_sizer6, proportion=0, flag=wx.EXPAND)
+        self._horz_sizer2.Add(self._vert_sizer_pad2, proportion=1, flag=wx.EXPAND)
 
         # stack rows of buttons
         self._vert_sizer0 = wx.BoxSizer(wx.VERTICAL)
@@ -176,14 +179,14 @@ class TerrainNavFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.on_add_wp_pushed, self._button_add_wp)
 
         self.Bind(wx.EVT_BUTTON, self.on_run_planner_pushed, self._button_run_planner)
+        self.Bind(wx.EVT_BUTTON, self.on_clear_path_pushed, self._button_clear_path)
+
         self.Bind(
             wx.EVT_BUTTON, self.on_gen_waypoints_pushed, self._button_gen_waypoints
         )
-        self.Bind(wx.EVT_BUTTON, self.on_clear_path_pushed, self._button_clear_path)
         self.Bind(
             wx.EVT_BUTTON, self.on_clear_waypoints_pushed, self._button_clear_waypoints
         )
-        self.Bind(wx.EVT_BUTTON, self.on_clear_all_pushed, self._button_clear_all)
 
         self.Bind(wx.EVT_BUTTON, self.on_hold_pushed, self._button_hold)
         self.Bind(wx.EVT_BUTTON, self.on_navigate_pushed, self._button_navigate)
@@ -318,10 +321,6 @@ class TerrainNavFrame(wx.Frame):
 
     def on_clear_waypoints_pushed(self, event):
         msg = terrainnav_msgs.ClearWaypoints()
-        self._state.ui_pipe_send.send(msg)
-
-    def on_clear_all_pushed(self, event):
-        msg = terrainnav_msgs.ClearAll()
         self._state.ui_pipe_send.send(msg)
 
     def on_settings_pushed(self, event):
