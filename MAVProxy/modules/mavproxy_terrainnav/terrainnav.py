@@ -664,8 +664,8 @@ class TerrainNavModule(mp_module.MPModule):
 
             if self.module("terrain") is not None:
                 elevation_model = self.module("terrain").ElevationModel
-                ter_alt = elevation_model.GetElevation(*point)
-                is_path_valid = is_path_valid and alt > ter_alt
+                ter_alt_amsl = elevation_model.GetElevation(*point)
+                is_path_valid = is_path_valid and alt > ter_alt_amsl
 
         if len(polygon) > 1:
             colour = (0, 255, 0) if is_path_valid else (255, 0, 0)
@@ -708,14 +708,14 @@ class TerrainNavModule(mp_module.MPModule):
                 lon = point[1]
                 alt = pos[2]
                 elevation_model = self.module("terrain").ElevationModel
-                ter_alt = elevation_model.GetElevation(lat, lon)
-                agl_alt = alt - ter_alt
+                ter_alt_amsl = elevation_model.GetElevation(lat, lon)
+                alt_agl = alt - ter_alt_amsl
                 if self.is_debug:
                     print(
                         f"[terrainnav] "
                         f"state: {i}, east: {east:.2f}, north: {north:.2f}, "
-                        f"lat: {lat:.6f}, lon: {lon:.6f}, wp_alt: {alt:.2f}, "
-                        f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
+                        f"lat: {lat:.6f}, lon: {lon:.6f}, wp_alt_amsl: {alt:.2f}, "
+                        f"ter_alt_amsl: {ter_alt_amsl:.2f}, alt_agl: {alt_agl:.2f}"
                     )
 
         if len(polygon) > 1:
@@ -803,6 +803,14 @@ class TerrainNavModule(mp_module.MPModule):
         if path is None or map_lat is None or map_lon is None:
             return
 
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+
+        home = wp_module.get_home()
+        if home is None:
+            return
+
         terrain_module = self.module("terrain")
         if terrain_module is None:
             return None
@@ -821,8 +829,22 @@ class TerrainNavModule(mp_module.MPModule):
             state.position, state.velocity, Vector3(start_x, start_y, 0.0)
         )
 
-        ter_alt = elevation_model.GetElevation(wp_lat, wp_lon)
-        wp_alt = ter_alt + self.terrainnav_settings.loiter_agl_alt
+        # TODO: add to settings
+        use_relative_alt = True
+
+        # TODO: check home.frame
+        home_alt_amsl = home.z
+
+        ter_alt_amsl = elevation_model.GetElevation(wp_lat, wp_lon)
+        wp_alt_amsl = ter_alt_amsl + self.terrainnav_settings.loiter_agl_alt
+
+        if use_relative_alt:
+            wp_frame = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT
+            wp_alt = wp_alt_amsl - home_alt_amsl
+        else:
+            wp_frame = mavutil.mavlink.MAV_FRAME_GLOBAL
+            wp_alt = wp_alt_amsl
+
         p1 = 1.0  # heading required: 0: no, 1: yes
         p2 = loiter_dir_frd * self.terrainnav_settings.loiter_radius  # radius
         p3 = 0.0
@@ -831,7 +853,7 @@ class TerrainNavModule(mp_module.MPModule):
             target_system=self.mpstate.settings.target_system,
             target_component=self.mpstate.settings.target_component,
             seq=seq,
-            frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+            frame=wp_frame,
             command=mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT,
             current=0,
             autocontinue=1,
@@ -860,6 +882,14 @@ class TerrainNavModule(mp_module.MPModule):
         if path is None or map_lat is None or map_lon is None:
             return
 
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+
+        home = wp_module.get_home()
+        if home is None:
+            return
+
         terrain_module = self.module("terrain")
         if terrain_module is None:
             return None
@@ -878,8 +908,22 @@ class TerrainNavModule(mp_module.MPModule):
             state.position, state.velocity, Vector3(start_x, start_y, 0.0)
         )
 
-        ter_alt = elevation_model.GetElevation(wp_lat, wp_lon)
-        wp_alt = ter_alt + self.terrainnav_settings.loiter_agl_alt
+        # TODO: add to settings
+        use_relative_alt = True
+
+        # TODO: check home.frame
+        home_alt_amsl = home.z
+
+        ter_alt_amsl = elevation_model.GetElevation(wp_lat, wp_lon)
+        wp_alt_amsl = ter_alt_amsl + self.terrainnav_settings.loiter_agl_alt
+
+        if use_relative_alt:
+            wp_frame = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT
+            wp_alt = wp_alt_amsl - home_alt_amsl
+        else:
+            wp_frame = mavutil.mavlink.MAV_FRAME_GLOBAL
+            wp_alt = wp_alt_amsl
+
         p1 = 0.0  # empty
         p2 = 0.0  # empty
         p3 = loiter_dir_frd * self.terrainnav_settings.loiter_radius  # radius
@@ -888,7 +932,7 @@ class TerrainNavModule(mp_module.MPModule):
             target_system=self.mpstate.settings.target_system,
             target_component=self.mpstate.settings.target_component,
             seq=seq,
-            frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+            frame=wp_frame,
             command=mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM,
             current=0,
             autocontinue=1,
@@ -925,9 +969,14 @@ class TerrainNavModule(mp_module.MPModule):
         mission_items = []
         wp_num = 0
 
+        # TODO: add to settings
+        use_relative_alt = True
         add_home = True
         add_start_loiter = True
         add_goal_loiter = True
+
+        # TODO: check home.frame
+        home_alt_amsl = home.z
 
         if add_home:
             mission_item = self._wp_gen_home(wp_num, home)
@@ -971,19 +1020,26 @@ class TerrainNavModule(mp_module.MPModule):
         for i, pos in enumerate(wp_positions):
             east = pos.x
             north = pos.y
-            wp_alt = pos.z
+            wp_alt_amsl = pos.z
             (wp_lat, wp_lon) = mp_util.gps_offset(map_lat, map_lon, east, north)
 
             if self.is_debug and self.module("terrain") is not None:
                 elevation_model = self.module("terrain").ElevationModel
-                ter_alt = elevation_model.GetElevation(wp_lat, wp_lon)
-                agl_alt = wp_alt - ter_alt
+                ter_alt_amsl = elevation_model.GetElevation(wp_lat, wp_lon)
+                wp_alt_agl = wp_alt_amsl - ter_alt_amsl
                 print(
                     f"[terrainnav] "
                     f"wp: {wp_num}, east: {east:.2f}, north: {north:.2f}, "
-                    f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt: {wp_alt:.2f}, "
-                    f"ter_alt: {ter_alt:.2f}, agl_alt: {agl_alt:.2f}"
+                    f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt_amsl: {wp_alt_amsl:.2f}, "
+                    f"ter_alt_amsl: {ter_alt_amsl:.2f}, wp_alt_agl: {wp_alt_agl:.2f}"
                 )
+        
+            if use_relative_alt:
+                wp_frame = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT
+                wp_alt = wp_alt_amsl - home_alt_amsl
+            else:
+                wp_frame = mavutil.mavlink.MAV_FRAME_GLOBAL
+                wp_alt = wp_alt_amsl
 
             pass_radius = 0.0
 
@@ -996,7 +1052,7 @@ class TerrainNavModule(mp_module.MPModule):
                 target_system=sys_id,
                 target_component=cmp_id,
                 seq=wp_num,
-                frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+                frame=wp_frame,
                 command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
                 current=0,
                 autocontinue=1,
@@ -1054,9 +1110,16 @@ class TerrainNavModule(mp_module.MPModule):
         mission_items = []
         wp_num = 0
 
+        # TODO: add wp generation settings to module
+        # MAV_FRAME_GLOBAL                amsl in WGS84 coordinate (WGS84 geoid)
+        # MAV_FRAME_GLOBAL_RELATIVE_ALT   relaive to HOME (WGS84 reference)
+        use_relative_alt = True
         add_home = True
         add_start_loiter = True
         add_goal_loiter = True
+
+        # TODO: check home.frame
+        home_alt_amsl = home.z
 
         if add_home:
             mission_item = self._wp_gen_home(wp_num, home)
@@ -1078,7 +1141,7 @@ class TerrainNavModule(mp_module.MPModule):
             position2 = Vector3(position3.x, position3.y, 0.0)
             tangent2 = Vector3(tangent3.x, tangent3.y, 0.0)
 
-            start_alt = segment.first_state().position.z
+            start_alt_amsl = segment.first_state().position.z
 
             (end_lat, end_lon) = mp_util.gps_offset(
                 map_lat,
@@ -1086,13 +1149,20 @@ class TerrainNavModule(mp_module.MPModule):
                 segment.last_state().position.x,
                 segment.last_state().position.y,
             )
-            end_alt = segment.last_state().position.z
+            end_alt_amsl = segment.last_state().position.z
             end_yaw_deg = math.degrees(segment.last_state().attitude.euler[2])
 
-            segment_delta_alt = end_alt - start_alt
+            segment_delta_alt = end_alt_amsl - start_alt_amsl
             segment_length = segment.get_length()
             segment_gamma = math.atan2(segment_delta_alt, segment_length)
             segment_gamma_deg = math.degrees(segment_gamma)
+
+            if use_relative_alt:
+                wp_frame = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT
+                end_alt = end_alt_amsl - home_alt_amsl
+            else:
+                wp_frame = mavutil.mavlink.MAV_FRAME_GLOBAL
+                end_alt = end_alt_amsl
 
             if self.is_debug:
                 print(
@@ -1102,6 +1172,7 @@ class TerrainNavModule(mp_module.MPModule):
                 )
 
             pass_radius = 0.0
+
             if curvature != 0.0:
                 # curvature in ENU, CCW is negative, CW is positive
                 pass_radius = 1.0 if curvature < 0 else -1.0
@@ -1131,7 +1202,7 @@ class TerrainNavModule(mp_module.MPModule):
                         target_system=sys_id,
                         target_component=cmp_id,
                         seq=wp_num,
-                        frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+                        frame=wp_frame,
                         command=mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT,
                         current=0,
                         autocontinue=1,
@@ -1155,7 +1226,7 @@ class TerrainNavModule(mp_module.MPModule):
                     target_system=sys_id,
                     target_component=cmp_id,
                     seq=wp_num,
-                    frame=mavutil.mavlink.MAV_FRAME_GLOBAL,
+                    frame=wp_frame,
                     command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
                     current=0,
                     autocontinue=1,
