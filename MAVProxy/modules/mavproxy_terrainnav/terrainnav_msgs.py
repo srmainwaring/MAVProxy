@@ -31,7 +31,12 @@ class RunPlanner:
 
 
 @dataclass
-class GenWaypoints:
+class AppendWaypoints:
+    pass
+
+
+@dataclass
+class ReplaceWaypoints:
     pass
 
 

@@ -31,6 +31,9 @@ from pymavlink.rotmat import Vector3
 from terrain_nav_py.path_segment import PathSegment
 from terrain_nav_py import terrain_planner as tp
 
+# TODO: use mode to modenumber lookup to resolve
+MODE_NUMBER_PLANNED_RTL = 31
+
 
 class TerrainNavModule(mp_module.MPModule):
 
@@ -39,6 +42,8 @@ class TerrainNavModule(mp_module.MPModule):
     def default_settings():
         return mp_settings.MPSettings(
             [
+                # TODO: change this to a mode: GCS, ONBOARD_COMPUTER
+                MPSetting("onboard_computer_mode", bool, False),
                 MPSetting("loiter_agl_alt", float, 60.0),
                 MPSetting("loiter_radius", float, 60.0),  # WP_LOITER_RADIUS
                 MPSetting("turning_radius", float, 60.0),  # WP_LOITER_RADIUS
@@ -55,6 +60,7 @@ class TerrainNavModule(mp_module.MPModule):
                     "SRTM1",
                     choice=["SRTM1", "SRTM3"],
                 ),
+                # TODO: maybe change to enum style value (all caps)?
                 MPSetting(
                     "wp_generator",
                     str,
@@ -161,11 +167,81 @@ class TerrainNavModule(mp_module.MPModule):
         setting_cb = partial(TerrainNavModule.setting_callback, self._parent_pipe_send)
         self.terrainnav_settings.set_callback(setting_cb)
 
-    def mavlink_packet(self, m) -> None:
+        # *** onboard computer settings (PLANNED_RTL) ***
+        self._planned_rtl_enabled = False
+        self._planned_rtl_max_retries = 1
+        self._planned_rtl_remaining_retries = self._planned_rtl_max_retries
+        self._planned_rtl_planner_status = None
+        # allow time for planner to respond
+        self._planned_rtl_send_delay = 1.0
+        self._planned_rtl_last_send = 0.0
+        self._planned_rtl_jump_to_wp = 0
+
+    def mavlink_packet(self, msg) -> None:
         """
         Process a mavlink message.
         """
-        mtype = m.get_type()
+
+        # NOTE: ONBOARD_COMPUTER
+        if msg and self.terrainnav_settings.onboard_computer_mode == True:
+            mtype = msg.get_type()
+            if mtype == "HEARTBEAT":
+                # Mode changes are reflected in the custom_mode field of HEARTBEAT
+                if msg.custom_mode == MODE_NUMBER_PLANNED_RTL:
+                    if not self._planned_rtl_enabled:
+                        print("PLANNED_RTL: ON")
+                        self._planned_rtl_enabled = True
+                        # Update wp, fence, and rally info
+                        # TODO: add a method
+                        fence_module = self.module("fence")
+                        if fence_module is not None:
+                            fence_module.cmd_list(None)
+
+                        rally_module = self.module("rally")
+                        if rally_module is not None:
+                            rally_module.cmd_list(None)
+
+                        wp_module = self.module("wp")
+                        if wp_module is not None:
+                            wp_module.cmd_list(None)
+
+                else:
+                    if self._planned_rtl_enabled:
+                        print("PLANNED_RTL: OFF")
+                        # Reset start and goal positions
+                        # TODO: add a reset method
+                        self.start_latlon = None
+                        self.goal_latlon = None
+                        self._planned_rtl_enabled = False
+                        self._planned_rtl_remaining_retries = (
+                            self._planned_rtl_max_retries
+                        )
+                        self._planned_rtl_planner_status = None
+            elif mtype == "POSITION_TARGET_GLOBAL_INT":
+                # LOITER will publish the current commanded vehicle position
+                # TODO: check the type_mask (POSITION_TARGET_TYPEMASK) for valid fields
+                # TODO: determine the loiter orientation from additional dat
+                #       (does not appear to be populated)
+                if self._planned_rtl_enabled:
+                    if self.start_latlon is None:
+                        loiter_lat = msg.lat_int * 1.0e-7
+                        loiter_lon = msg.lon_int * 1.0e-7
+                        loiter_frame = msg.coordinate_frame
+                        loiter_alt = msg.alt
+                        self._parent_pipe_send.send(
+                            tp.PlannerStartLatLon((loiter_lat, loiter_lon))
+                        )
+            elif mtype == "GLOBAL_POSITION_INT":
+                # LOITER for copter
+                if self._planned_rtl_enabled:
+                    if self.start_latlon is None:
+                        loiter_lat = msg.lat * 1.0e-7
+                        loiter_lon = msg.lon * 1.0e-7
+                        loiter_alt_amsl = msg.alt
+                        loiter_alt_rel = msg.relative_alt
+                        self._parent_pipe_send.send(
+                            tp.PlannerStartLatLon((loiter_lat, loiter_lon))
+                        )
 
         # TODO: following mavproxy_map which monitors fence updates in
         #       mavlink_packet rather than idle_task
@@ -185,6 +261,11 @@ class TerrainNavModule(mp_module.MPModule):
 
         # process messages from the UI
         self.process_ui_msgs()
+
+        # run onboard computer tasks
+        if (time.time() - self._planned_rtl_last_send) > self._planned_rtl_send_delay:
+            self.run_planned_rtl()
+            self._planned_rtl_last_send = time.time()
 
         # process messages from the planner
         self.process_planner_msgs()
@@ -249,8 +330,10 @@ class TerrainNavModule(mp_module.MPModule):
                     print("[terrainnav] Add Waypoint")
             elif isinstance(msg, terrainnav_msgs.RunPlanner):
                 self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
-            elif isinstance(msg, terrainnav_msgs.GenWaypoints):
-                self.generate_waypoints()
+            elif isinstance(msg, terrainnav_msgs.AppendWaypoints):
+                self.generate_waypoints(append=True)
+            elif isinstance(msg, terrainnav_msgs.ReplaceWaypoints):
+                self.generate_waypoints(append=False)
             elif isinstance(msg, terrainnav_msgs.ClearPath):
                 self.clear_path()
             elif isinstance(msg, terrainnav_msgs.ClearWaypoints):
@@ -326,6 +409,7 @@ class TerrainNavModule(mp_module.MPModule):
                 (lat, lon) = msg.goal_latlon
                 self.draw_goal(lat, lon, msg.is_valid)
             elif isinstance(msg, tp.PlannerStatus):
+                self._planned_rtl_planner_status = msg.status
                 if self.is_debug:
                     print(f"[terrainnav] PlannerStatus: {msg.status}")
             elif isinstance(msg, tp.PlannerPath):
@@ -730,40 +814,14 @@ class TerrainNavModule(mp_module.MPModule):
             )
             map_module.map.add_object(slip_polygon)
 
-    def generate_waypoints(self):
+    def generate_waypoints(self, append=False):
         wp_gen = self.terrainnav_settings.wp_generator
         if wp_gen == "SimpleWaypoints":
-            self._wp_gen_simple_waypoints()
+            self._wp_gen_simple_waypoints(append)
         elif wp_gen == "UseLoiterToAlt":
-            self._wp_gen_use_loiter_to_alt()
+            self._wp_gen_use_loiter_to_alt(append)
         else:
             print(f"[terrainnav] invalid WP generator: {wp_gen}")
-
-    def _wp_gen_home(self, seq, home):
-        """
-        Create a waypoint for the home position (the first item in a mission)
-        """
-        p1 = 0.0  # hold
-        p2 = 0.0  # accept radius
-        p3 = 0.0  # pass radius
-        p4 = 0.0  # yaw at waypoint
-        mission_item = mavutil.mavlink.MAVLink_mission_item_message(
-            target_system=self.mpstate.settings.target_system,
-            target_component=self.mpstate.settings.target_component,
-            seq=seq,
-            frame=home.frame,
-            command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
-            current=0,
-            autocontinue=1,
-            param1=p1,
-            param2=p2,
-            param3=p3,
-            param4=p4,
-            x=home.x,
-            y=home.y,
-            z=home.z,
-        )
-        return mission_item
 
     @staticmethod
     def loiter_dir_enu(position, velocity, centre):
@@ -787,12 +845,41 @@ class TerrainNavModule(mp_module.MPModule):
         loiter_dir = -1.0 if dir_3d.z < 0.0 else 1.0
         return loiter_dir
 
-    def _wp_gen_start_loiter(self, seq):
+    # NOTE: in the waypoint generation functions below, the sequence number
+    #       is NOT set on the mission items, instead they are all assigned 0,
+    #       and the items are assumed to be in the correct order.
+    #       The sequence item is set in the upload code.
+
+    def _wp_gen_home(self, home):
+        """
+        Create a waypoint for the home position (the first item in a mission)
+        """
+        p1 = 0.0  # hold
+        p2 = 0.0  # accept radius
+        p3 = 0.0  # pass radius
+        p4 = 0.0  # yaw at waypoint
+        mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+            target_system=self.mpstate.settings.target_system,
+            target_component=self.mpstate.settings.target_component,
+            seq=0,
+            frame=home.frame,
+            command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
+            current=0,
+            autocontinue=1,
+            param1=p1,
+            param2=p2,
+            param3=p3,
+            param4=p4,
+            x=home.x,
+            y=home.y,
+            z=home.z,
+        )
+        return mission_item
+
+    def _wp_gen_start_loiter(self):
         """
         Create a waypoint for the start loiter.
 
-        :param seq: mission item sequence assigned to this waypoint
-        :type seq: int
         :return: A MAVLink mission item
         """
         path = self._candidate_path
@@ -850,7 +937,7 @@ class TerrainNavModule(mp_module.MPModule):
         mission_item = mavutil.mavlink.MAVLink_mission_item_message(
             target_system=self.mpstate.settings.target_system,
             target_component=self.mpstate.settings.target_component,
-            seq=seq,
+            seq=0,
             frame=wp_frame,
             command=mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT,
             current=0,
@@ -865,12 +952,10 @@ class TerrainNavModule(mp_module.MPModule):
         )
         return mission_item
 
-    def _wp_gen_goal_loiter(self, seq):
+    def _wp_gen_goal_loiter(self):
         """
         Create a waypoint for the goal loiter.
 
-        :param seq: mission item sequence assigned to this waypoint
-        :type seq: int
         :return: A MAVLink mission item
         """
         path = self._candidate_path
@@ -928,7 +1013,7 @@ class TerrainNavModule(mp_module.MPModule):
         mission_item = mavutil.mavlink.MAVLink_mission_item_message(
             target_system=self.mpstate.settings.target_system,
             target_component=self.mpstate.settings.target_component,
-            seq=seq,
+            seq=0,
             frame=wp_frame,
             command=mavutil.mavlink.MAV_CMD_NAV_LOITER_UNLIM,
             current=0,
@@ -943,7 +1028,7 @@ class TerrainNavModule(mp_module.MPModule):
         )
         return mission_item
 
-    def _wp_gen_simple_waypoints(self):
+    def _wp_gen_simple_waypoints(self, append=False):
         path = self._candidate_path
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
@@ -964,37 +1049,44 @@ class TerrainNavModule(mp_module.MPModule):
         cmp_id = self.mpstate.settings.target_component
 
         mission_items = []
-        wp_num = 0
 
         use_relative_alt = self.terrainnav_settings.wp_use_relative_alt
         add_home = self.terrainnav_settings.wp_add_home
         add_start_loiter = self.terrainnav_settings.wp_add_start_loiter
         add_goal_loiter = self.terrainnav_settings.wp_add_goal_loiter
 
+        if append:
+            # get current mission items
+            wp_module.cmd_list(None)
+
+            for i in range(wp_module.wploader.count()):
+                mission_items.append(wp_module.wploader.wp(i))
+
+                # TODO: ugly placing this here
+                self._planned_rtl_jump_to_wp = wp_module.wploader.count() + 1
+
         # TODO: check home.frame
         home_alt_amsl = home.z
 
-        if add_home:
+        # do not add home when appending
+        if add_home and not append:
             if self.is_debug:
                 print("[terrainnav] adding home")
-            mission_item = self._wp_gen_home(wp_num, home)
+            mission_item = self._wp_gen_home(home)
             if mission_item is not None:
                 mission_items.append(mission_item)
-                wp_num += 1
 
         if add_start_loiter:
             if self.is_debug:
                 print("[terrainnav] adding start loiter")
-            mission_item = self._wp_gen_start_loiter(wp_num)
+            mission_item = self._wp_gen_start_loiter()
             if mission_item is not None:
                 mission_items.append(mission_item)
-                wp_num += 1
 
         # sample waypoints along the path
         if self.is_debug:
             print("[terrainnav] adding waypoints")
         wp_spacing = self.terrainnav_settings.wp_spacing
-        wp_num_total = 0
         wp_positions = []
         for i, segment in enumerate(path._segments):
             count = segment.state_count()
@@ -1009,13 +1101,11 @@ class TerrainNavModule(mp_module.MPModule):
             if (i % 3 == 0) and (i != 0):
                 filtered_positions = filtered_positions[:-1]
             wp_positions.extend(filtered_positions)
-            wp_num = len(filtered_positions)
-            wp_num_total += wp_num
             if self.is_debug:
                 print(
                     f"[terrainnav] "
                     f"segment[{i}]: count: {count}, length: {length:.2f}, dt: {dt:.2f}, "
-                    f"wp_num: {wp_num}, wp_num_total: {wp_num_total}, stride: {stride}"
+                    f"stride: {stride}"
                 )
 
         # convert positions [(east, north, alt)] to locations [(lat, lon, alt)]
@@ -1031,7 +1121,7 @@ class TerrainNavModule(mp_module.MPModule):
                 wp_alt_agl = wp_alt_amsl - ter_alt_amsl
                 print(
                     f"[terrainnav] "
-                    f"wp: {wp_num}, east: {east:.2f}, north: {north:.2f}, "
+                    f"east: {east:.2f}, north: {north:.2f}, "
                     f"lat: {wp_lat:.6f}, lon: {wp_lon:.6f}, wp_alt_amsl: {wp_alt_amsl:.2f}, "
                     f"ter_alt_amsl: {ter_alt_amsl:.2f}, wp_alt_agl: {wp_alt_agl:.2f}"
                 )
@@ -1053,7 +1143,7 @@ class TerrainNavModule(mp_module.MPModule):
             mission_item = mavutil.mavlink.MAVLink_mission_item_message(
                 target_system=sys_id,
                 target_component=cmp_id,
-                seq=wp_num,
+                seq=0,
                 frame=wp_frame,
                 command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
                 current=0,
@@ -1067,15 +1157,13 @@ class TerrainNavModule(mp_module.MPModule):
                 z=wp_alt,
             )
             mission_items.append(mission_item)
-            wp_num += 1
 
         if add_goal_loiter:
             if self.is_debug:
                 print("[terrainnav] adding goal loiter")
-            mission_item = self._wp_gen_goal_loiter(wp_num)
+            mission_item = self._wp_gen_goal_loiter()
             if mission_item is not None:
                 mission_items.append(mission_item)
-                wp_num += 1
 
         # prepare waypoints for load
         wp_module.wploader.clear()
@@ -1083,15 +1171,16 @@ class TerrainNavModule(mp_module.MPModule):
         self.mpstate.master().waypoint_count_send(len(mission_items))
         for w in mission_items:
             wp_module.wploader.add(w)
-            wsend = wp_module.wploader.wp(w.seq)
+            seq = wp_module.wploader.count() - 1
+            wsend = wp_module.wploader.wp(seq)
             if self.mpstate.settings.wp_use_mission_int:
-                wsend = wp_module.wp_to_mission_item_int(w)
+                wsend = wp_module.wp_to_mission_item_int(wsend)
             self.mpstate.master().mav.send(wsend)
 
             # tell the wp module to expect some waypoints
             wp_module.loading_waypoints = True
 
-    def _wp_gen_use_loiter_to_alt(self):
+    def _wp_gen_use_loiter_to_alt(self, append=False):
         path = self._candidate_path
         map_lat = self._grid_map_lat
         map_lon = self._grid_map_lon
@@ -1112,31 +1201,39 @@ class TerrainNavModule(mp_module.MPModule):
         cmp_id = self.mpstate.settings.target_component
 
         mission_items = []
-        wp_num = 0
 
         use_relative_alt = self.terrainnav_settings.wp_use_relative_alt
         add_home = self.terrainnav_settings.wp_add_home
         add_start_loiter = self.terrainnav_settings.wp_add_start_loiter
         add_goal_loiter = self.terrainnav_settings.wp_add_goal_loiter
 
-        # TODO: check home.frame
+        if append:
+            # get current mission items
+            wp_module.cmd_list(None)
+
+            for i in range(wp_module.wploader.count()):
+                mission_items.append(wp_module.wploader.wp(i))
+
+                # TODO: ugly placing this here
+                self._planned_rtl_jump_to_wp = wp_module.wploader.count() + 1
+
+        # TODO: check home.frame (amsl or rel)
         home_alt_amsl = home.z
 
-        if add_home:
+        # do not add home when appending
+        if add_home and not append:
             if self.is_debug:
                 print("[terrainnav] adding home")
-            mission_item = self._wp_gen_home(wp_num, home)
+            mission_item = self._wp_gen_home(home)
             if mission_item is not None:
                 mission_items.append(mission_item)
-                wp_num += 1
 
         if add_start_loiter:
             if self.is_debug:
                 print("[terrainnav] adding start loiter")
-            mission_item = self._wp_gen_start_loiter(wp_num)
+            mission_item = self._wp_gen_start_loiter()
             if mission_item is not None:
                 mission_items.append(mission_item)
-                wp_num += 1
 
         # add path mission items
         if self.is_debug:
@@ -1174,7 +1271,7 @@ class TerrainNavModule(mp_module.MPModule):
             if self.is_debug:
                 print(
                     f"[terrainnav] "
-                    f"[{wp_num}] delta_alt: {segment_delta_alt:.2f}, "
+                    f"delta_alt: {segment_delta_alt:.2f}, "
                     f"length: {segment_length:.2f}, gamma_deg: {segment_gamma_deg:.2f}"
                 )
 
@@ -1208,7 +1305,7 @@ class TerrainNavModule(mp_module.MPModule):
                     mission_item = mavutil.mavlink.MAVLink_mission_item_message(
                         target_system=sys_id,
                         target_component=cmp_id,
-                        seq=wp_num,
+                        seq=0,
                         frame=wp_frame,
                         command=mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT,
                         current=0,
@@ -1222,7 +1319,6 @@ class TerrainNavModule(mp_module.MPModule):
                         z=end_alt,
                     )
                     mission_items.append(mission_item)
-                    wp_num += 1
             else:
                 # mission item MAV_CMD_NAV_WAYPOINT (16)
                 p1 = 0.0  # hold
@@ -1232,7 +1328,7 @@ class TerrainNavModule(mp_module.MPModule):
                 mission_item = mavutil.mavlink.MAVLink_mission_item_message(
                     target_system=sys_id,
                     target_component=cmp_id,
-                    seq=wp_num,
+                    seq=0,
                     frame=wp_frame,
                     command=mavutil.mavlink.MAV_CMD_NAV_WAYPOINT,
                     current=0,
@@ -1246,15 +1342,13 @@ class TerrainNavModule(mp_module.MPModule):
                     z=end_alt,
                 )
                 mission_items.append(mission_item)
-                wp_num += 1
 
         if add_goal_loiter:
             if self.is_debug:
                 print("[terrainnav] adding goal loiter")
-            mission_item = self._wp_gen_goal_loiter(wp_num)
+            mission_item = self._wp_gen_goal_loiter()
             if mission_item is not None:
                 mission_items.append(mission_item)
-                wp_num += 1
 
         # prepare waypoints for load
         wp_module.wploader.clear()
@@ -1262,9 +1356,10 @@ class TerrainNavModule(mp_module.MPModule):
         self.mpstate.master().waypoint_count_send(len(mission_items))
         for w in mission_items:
             wp_module.wploader.add(w)
-            wsend = wp_module.wploader.wp(w.seq)
+            seq = wp_module.wploader.count() - 1
+            wsend = wp_module.wploader.wp(seq)
             if self.mpstate.settings.wp_use_mission_int:
-                wsend = wp_module.wp_to_mission_item_int(w)
+                wsend = wp_module.wp_to_mission_item_int(wsend)
             self.mpstate.master().mav.send(wsend)
 
             # tell the wp module to expect some waypoints
@@ -1293,3 +1388,66 @@ class TerrainNavModule(mp_module.MPModule):
                 msg.exclusion_circles = fence_module.exclusion_circles()
                 msg.inclusion_circles = fence_module.inclusion_circles()
                 self._parent_pipe_send.send(msg)
+
+    # TODO: onboard computer tasks
+    def run_planned_rtl(self):
+        if not self.terrainnav_settings.onboard_computer_mode:
+            return
+
+        if not self._planned_rtl_enabled:
+            return
+
+        # Check start is valid
+        if self.start_latlon is None:
+            return
+
+        if self.goal_latlon is None:
+            wp_module = self.module("wp")
+            if wp_module is None:
+                return
+            home = wp_module.get_home()
+            if home is None:
+                return
+
+            # Get goal position
+            # TODO: use HOME, but should use rally if available
+            self._parent_pipe_send.send(tp.PlannerGoalLatLon((home.x, home.y)))
+            return
+
+        # Check status
+        if self._planned_rtl_planner_status == "INVALID_START":
+            return
+        elif self._planned_rtl_planner_status == "INVALID_GOAL":
+            return
+        elif self._planned_rtl_planner_status == "PENDING":
+            return
+        elif self._planned_rtl_planner_status == "PLANNER_EXCEPTION":
+            return
+        elif self._planned_rtl_planner_status == "OK":
+            print("[terrainnav] PLANNED_RTL found solution")
+
+            # update waypoints
+            self.generate_waypoints(append=True)
+
+            # TODO: for debugging when the map is visible - list waypoints
+            wp_module = self.module("wp")
+            if wp_module is None:
+                return
+            wp_module.cmd_list(None)
+
+            # jump to first planned RTL waypoint
+            # PLANNED_RTL> wp set <wpindex>
+            wp_module.cmd_set([self._planned_rtl_jump_to_wp])
+
+            # switch mode
+            # PLANNED_RTL> auto
+            mode_module = self.module("mode")
+            if mode_module is None:
+                return
+            mode_module.cmd_mode(["AUTO"])
+            return
+
+        # Run planner if retries left
+        if self._planned_rtl_remaining_retries > 0:
+            self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
+            self._planned_rtl_remaining_retries -= 1
