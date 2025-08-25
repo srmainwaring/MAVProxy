@@ -27,7 +27,7 @@ class TerrainNavFrame(wx.Frame):
         self._vert_sizer_pad2 = wx.StaticBoxSizer(wx.VERTICAL, self)
 
         # buttons
-        button_size = (120, 25)
+        button_size = (130, 25)
 
         # locations
         location_box = self._vert_sizer1.GetStaticBox()
@@ -91,8 +91,11 @@ class TerrainNavFrame(wx.Frame):
 
         # waypoint generation
         wp_gen_box = self._vert_sizer5.GetStaticBox()
-        self._button_gen_waypoints = wx.Button(
-            wp_gen_box, id=wx.ID_ANY, label="Gen Waypoints", size=button_size
+        self._button_append_waypoints = wx.Button(
+            wp_gen_box, id=wx.ID_ANY, label="Append Waypoints", size=button_size
+        )
+        self._button_replace_waypoints = wx.Button(
+            wp_gen_box, id=wx.ID_ANY, label="Replace Waypoints", size=button_size
         )
         self._button_clear_waypoints = wx.Button(
             wp_gen_box, id=wx.ID_ANY, label="Clear Waypoints", size=button_size
@@ -145,7 +148,12 @@ class TerrainNavFrame(wx.Frame):
         self._vert_sizer4.Add(self._button_move_boundary, proportion=0, flag=wx.EXPAND)
 
         # waypoint generation layout
-        self._vert_sizer5.Add(self._button_gen_waypoints, proportion=0, flag=wx.EXPAND)
+        self._vert_sizer5.Add(
+            self._button_append_waypoints, proportion=0, flag=wx.EXPAND
+        )
+        self._vert_sizer5.Add(
+            self._button_replace_waypoints, proportion=0, flag=wx.EXPAND
+        )
         self._vert_sizer5.Add(
             self._button_clear_waypoints, proportion=0, flag=wx.EXPAND
         )
@@ -182,7 +190,14 @@ class TerrainNavFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.on_clear_path_pushed, self._button_clear_path)
 
         self.Bind(
-            wx.EVT_BUTTON, self.on_gen_waypoints_pushed, self._button_gen_waypoints
+            wx.EVT_BUTTON,
+            self.on_append_waypoints_pushed,
+            self._button_append_waypoints,
+        )
+        self.Bind(
+            wx.EVT_BUTTON,
+            self.on_replace_waypoints_pushed,
+            self._button_replace_waypoints,
         )
         self.Bind(
             wx.EVT_BUTTON, self.on_clear_waypoints_pushed, self._button_clear_waypoints
@@ -271,8 +286,12 @@ class TerrainNavFrame(wx.Frame):
         msg = terrainnav_msgs.RunPlanner()
         self._state.ui_pipe_send.send(msg)
 
-    def on_gen_waypoints_pushed(self, event):
-        msg = terrainnav_msgs.GenWaypoints()
+    def on_append_waypoints_pushed(self, event):
+        msg = terrainnav_msgs.AppendWaypoints()
+        self._state.ui_pipe_send.send(msg)
+
+    def on_replace_waypoints_pushed(self, event):
+        msg = terrainnav_msgs.ReplaceWaypoints()
         self._state.ui_pipe_send.send(msg)
 
     def on_hold_pushed(self, event):
