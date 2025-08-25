@@ -161,8 +161,6 @@ class TerrainNavModule(mp_module.MPModule):
         setting_cb = partial(TerrainNavModule.setting_callback, self._parent_pipe_send)
         self.terrainnav_settings.set_callback(setting_cb)
 
-        self.start_planner()
-
     def mavlink_packet(self, m) -> None:
         """
         Process a mavlink message.
@@ -180,6 +178,10 @@ class TerrainNavModule(mp_module.MPModule):
         # tell MAVProxy to unload the module if the UI is closed
         if self.app.close_event.wait(timeout=0.001):
             self.needs_unloading = True
+
+        # start planner
+        if self._planner_process is None:
+            self.start_planner()
 
         # process messages from the UI
         self.process_ui_msgs()
