@@ -1446,7 +1446,7 @@ class TerrainNavModule(mp_module.MPModule):
             print("[terrainnav] PLANNED_RTL found solution")
 
             # check path is valid
-            if not self._candidate_path.is_valid():
+            if not self._candidate_path.is_valid:
                 print(f"[terrain_nav] invalid path")
                 self._planned_rtl_planner_status = None
                 return
