@@ -749,7 +749,9 @@ class TerrainNavModule(mp_module.MPModule):
                 elevation_model = self.module("terrain").ElevationModel
                 ter_alt_amsl = elevation_model.GetElevation(*point)
                 if ter_alt_amsl is None:
-                    print(f"[terrainnav] no elevation data for lat: {point[0]}, lon: {point[1]}")
+                    print(
+                        f"[terrainnav] no elevation data for lat: {point[0]}, lon: {point[1]}"
+                    )
                     return
                 is_path_valid = is_path_valid and alt > ter_alt_amsl
 
@@ -1443,6 +1445,12 @@ class TerrainNavModule(mp_module.MPModule):
         elif self._planned_rtl_planner_status == "OK":
             print("[terrainnav] PLANNED_RTL found solution")
 
+            # check path is valid
+            if not self._candidate_path.is_valid():
+                print(f"[terrain_nav] invalid path")
+                self._planned_rtl_planner_status = None
+                return
+
             # update waypoints
             self.generate_waypoints(append=True)
 
@@ -1468,3 +1476,9 @@ class TerrainNavModule(mp_module.MPModule):
         if self._planned_rtl_remaining_retries > 0:
             self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
             self._planned_rtl_remaining_retries -= 1
+        else:
+            print(
+                f"[terrainnav] "
+                f"PLANNED_RTL failed to find solution after "
+                f"{self._planned_rtl_max_retries} attempts"
+            )
