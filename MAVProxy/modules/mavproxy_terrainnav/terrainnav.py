@@ -748,6 +748,9 @@ class TerrainNavModule(mp_module.MPModule):
             if self.module("terrain") is not None:
                 elevation_model = self.module("terrain").ElevationModel
                 ter_alt_amsl = elevation_model.GetElevation(*point)
+                if ter_alt_amsl is None:
+                    print(f"[terrainnav] no elevation data for lat: {point[0]}, lon: {point[1]}")
+                    return
                 is_path_valid = is_path_valid and alt > ter_alt_amsl
 
         if len(polygon) > 1:
@@ -792,6 +795,9 @@ class TerrainNavModule(mp_module.MPModule):
                 alt = pos[2]
                 elevation_model = self.module("terrain").ElevationModel
                 ter_alt_amsl = elevation_model.GetElevation(lat, lon)
+                if ter_alt_amsl is None:
+                    print(f"[terrainnav] no elevation data for lat: {lat}, lon: {lon}")
+                    return
                 alt_agl = alt - ter_alt_amsl
                 if self.is_debug:
                     print(
@@ -921,6 +927,9 @@ class TerrainNavModule(mp_module.MPModule):
         home_alt_amsl = home.z
 
         ter_alt_amsl = elevation_model.GetElevation(wp_lat, wp_lon)
+        if ter_alt_amsl is None:
+            print(f"[terrainnav] no elevation data for lat: {wp_lat}, lon: {wp_lon}")
+            return None
         wp_alt_amsl = ter_alt_amsl + self.terrainnav_settings.loiter_agl_alt
 
         if use_relative_alt:
@@ -997,6 +1006,9 @@ class TerrainNavModule(mp_module.MPModule):
         home_alt_amsl = home.z
 
         ter_alt_amsl = elevation_model.GetElevation(wp_lat, wp_lon)
+        if ter_alt_amsl is None:
+            print(f"[terrainnav] no elevation data for lat: {wp_lat}, lon: {wp_lon}")
+            return None
         wp_alt_amsl = ter_alt_amsl + self.terrainnav_settings.loiter_agl_alt
 
         if use_relative_alt:
@@ -1118,6 +1130,11 @@ class TerrainNavModule(mp_module.MPModule):
             if self.is_debug and self.module("terrain") is not None:
                 elevation_model = self.module("terrain").ElevationModel
                 ter_alt_amsl = elevation_model.GetElevation(wp_lat, wp_lon)
+                if ter_alt_amsl is None:
+                    print(
+                        f"[terrainnav] no elevation data for lat: {wp_lat}, lon: {wp_lon}"
+                    )
+                    return
                 wp_alt_agl = wp_alt_amsl - ter_alt_amsl
                 print(
                     f"[terrainnav] "
