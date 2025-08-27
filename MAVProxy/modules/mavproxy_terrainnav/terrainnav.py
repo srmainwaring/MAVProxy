@@ -77,6 +77,11 @@ class TerrainNavModule(mp_module.MPModule):
         )
 
     def __init__(self, mpstate: MPState) -> None:
+        """
+        Constructor
+
+        thread: MainThread
+        """
         super().__init__(mpstate, "terrainnav", "terrain navigation module")
 
         # *** planner settings ***
@@ -153,8 +158,13 @@ class TerrainNavModule(mp_module.MPModule):
         self._map_circle_linewidth = 2
         self._is_boundary_visible = False
 
-        # *** fence state ***
+        # *** wp, fence, rally state ***
+        self._wp_have_requested_list = False
+        self._fence_have_requested_list = False
+        self._rally_have_requested_list = False
+        self._wp_change_time = 0
         self._fence_change_time = 0
+        self._rally_change_time = 0
 
         # *** planner multiprocessing ***
         self._planner_process = None
@@ -169,20 +179,22 @@ class TerrainNavModule(mp_module.MPModule):
 
         # *** onboard computer settings (PLANNED_RTL) ***
         self._planned_rtl_enabled = False
-        self._planned_rtl_max_retries = 1
+        self._planned_rtl_max_retries = 5
         self._planned_rtl_remaining_retries = self._planned_rtl_max_retries
         self._planned_rtl_planner_status = None
         # allow time for planner to respond
         self._planned_rtl_send_delay = 1.0
-        self._planned_rtl_last_send = 0.0
+        self._planned_rtl_last_time = 0.0
         self._planned_rtl_jump_to_wp = 0
 
     def mavlink_packet(self, msg) -> None:
         """
         Process a mavlink message.
+
+        thread: main_loop
         """
 
-        # NOTE: ONBOARD_COMPUTER
+        # onboard computer mode only
         if msg and self.terrainnav_settings.onboard_computer_mode == True:
             mtype = msg.get_type()
             if mtype == "HEARTBEAT":
@@ -191,25 +203,12 @@ class TerrainNavModule(mp_module.MPModule):
                     if not self._planned_rtl_enabled:
                         print("PLANNED_RTL: ON")
                         self._planned_rtl_enabled = True
-                        # Update wp, fence, and rally info
-                        # TODO: add a method
-                        fence_module = self.module("fence")
-                        if fence_module is not None:
-                            fence_module.cmd_list(None)
-
-                        rally_module = self.module("rally")
-                        if rally_module is not None:
-                            rally_module.cmd_list(None)
-
-                        wp_module = self.module("wp")
-                        if wp_module is not None:
-                            wp_module.cmd_list(None)
-
                 else:
                     if self._planned_rtl_enabled:
                         print("PLANNED_RTL: OFF")
                         # Reset start and goal positions
                         # TODO: add a reset method
+                        self._candidate_path = None
                         self.start_latlon = None
                         self.goal_latlon = None
                         self._planned_rtl_enabled = False
@@ -217,17 +216,15 @@ class TerrainNavModule(mp_module.MPModule):
                             self._planned_rtl_max_retries
                         )
                         self._planned_rtl_planner_status = None
+                        self._planned_rtl_jump_to_wp = 0
             elif mtype == "POSITION_TARGET_GLOBAL_INT":
-                # LOITER will publish the current commanded vehicle position
+                # LOITER for plane / quadplane
                 # TODO: check the type_mask (POSITION_TARGET_TYPEMASK) for valid fields
-                # TODO: determine the loiter orientation from additional dat
-                #       (does not appear to be populated)
+                # TODO: determine the loiter orientation
                 if self._planned_rtl_enabled:
                     if self.start_latlon is None:
                         loiter_lat = msg.lat_int * 1.0e-7
                         loiter_lon = msg.lon_int * 1.0e-7
-                        loiter_frame = msg.coordinate_frame
-                        loiter_alt = msg.alt
                         self._parent_pipe_send.send(
                             tp.PlannerStartLatLon((loiter_lat, loiter_lon))
                         )
@@ -237,19 +234,40 @@ class TerrainNavModule(mp_module.MPModule):
                     if self.start_latlon is None:
                         loiter_lat = msg.lat * 1.0e-7
                         loiter_lon = msg.lon * 1.0e-7
-                        loiter_alt_amsl = msg.alt
-                        loiter_alt_rel = msg.relative_alt
                         self._parent_pipe_send.send(
                             tp.PlannerStartLatLon((loiter_lat, loiter_lon))
                         )
 
+            # ensure waypoints etc are listed once
+            if not self._wp_have_requested_list:
+                wp_module = self.module("wp")
+                if wp_module is not None:
+                    wp_module.cmd_list([None])
+                    self._wp_have_requested_list = True
+
+            if not self._fence_have_requested_list:
+                fence_module = self.module("fence")
+                if fence_module is not None:
+                    fence_module.cmd_list([None])
+                    self._fence_have_requested_list = True
+
+            if not self._rally_have_requested_list:
+                rally_module = self.module("rally")
+                if rally_module is not None:
+                    rally_module.cmd_list([None])
+                    self._rally_have_requested_list = True
+
         # TODO: following mavproxy_map which monitors fence updates in
         #       mavlink_packet rather than idle_task
+        self.check_reinit_waypoints()
         self.check_reinit_fencepoints()
+        self.check_reinit_rallypoints()
 
     def idle_task(self) -> None:
         """
         Called on idle.
+
+        thread: main_loop
         """
         # tell MAVProxy to unload the module if the UI is closed
         if self.app.close_event.wait(timeout=0.001):
@@ -263,9 +281,10 @@ class TerrainNavModule(mp_module.MPModule):
         self.process_ui_msgs()
 
         # run onboard computer tasks
-        if (time.time() - self._planned_rtl_last_send) > self._planned_rtl_send_delay:
-            self.run_planned_rtl()
-            self._planned_rtl_last_send = time.time()
+        if (time.time() - self._planned_rtl_last_time) > self._planned_rtl_send_delay:
+            if self.terrainnav_settings.onboard_computer_mode:
+                self.run_planned_rtl()
+            self._planned_rtl_last_time = time.time()
 
         # process messages from the planner
         self.process_planner_msgs()
@@ -413,8 +432,6 @@ class TerrainNavModule(mp_module.MPModule):
                 if self.is_debug:
                     print(f"[terrainnav] PlannerStatus: {msg.status}")
             elif isinstance(msg, tp.PlannerPath):
-                if self.is_debug:
-                    print(f"[terrainnav] PlannerPath: {msg.path}")
                 self._candidate_path = msg.path
                 self.draw_path(msg.path)
             elif isinstance(msg, tp.PlannerStates):
@@ -1070,9 +1087,6 @@ class TerrainNavModule(mp_module.MPModule):
         add_goal_loiter = self.terrainnav_settings.wp_add_goal_loiter
 
         if append:
-            # get current mission items
-            wp_module.cmd_list(None)
-
             for i in range(wp_module.wploader.count()):
                 mission_items.append(wp_module.wploader.wp(i))
 
@@ -1227,9 +1241,6 @@ class TerrainNavModule(mp_module.MPModule):
         add_goal_loiter = self.terrainnav_settings.wp_add_goal_loiter
 
         if append:
-            # get current mission items
-            wp_module.cmd_list(None)
-
             for i in range(wp_module.wploader.count()):
                 mission_items.append(wp_module.wploader.wp(i))
 
@@ -1388,7 +1399,36 @@ class TerrainNavModule(mp_module.MPModule):
     def is_debug(self):
         return self.mpstate.settings.moddebug > 1
 
+    def check_reinit_waypoints(self):
+        """
+        thread: main_loop
+        """
+        # NOTE: see: mavproxy_map check_redisplay_fencepoints
+        wp_module = self.module("wp")
+        if wp_module is not None:
+            last_change = wp_module.wploader.last_change
+
+            if self._wp_change_time != last_change:
+                self._wp_change_time = last_change
+                # print("[terrainnav] waypoints changed")
+
+    def check_reinit_rallypoints(self):
+        """
+        thread: main_loop
+        """
+        # NOTE: see: mavproxy_map check_redisplay_fencepoints
+        rally_module = self.module("rally")
+        if rally_module is not None:
+            last_change = rally_module.wploader.last_change
+
+            if self._rally_change_time != last_change:
+                self._rally_change_time = last_change
+                # print("[terrainnav] rally points changed")
+
     def check_reinit_fencepoints(self):
+        """
+        thread: main_loop
+        """
         # NOTE: see: mavproxy_map check_redisplay_fencepoints
         fence_module = self.module("fence")
         if fence_module is not None:
@@ -1400,6 +1440,8 @@ class TerrainNavModule(mp_module.MPModule):
                 last_change = fence_module.fenceloader.last_change
             if self._fence_change_time != last_change:
                 self._fence_change_time = last_change
+                # print("[terrainnav] fences changed")
+
                 # send polyfences to planner process
                 msg = tp.PlannerPolyFences()
                 msg.exclusion_polygons = fence_module.exclusion_polygons()
@@ -1410,6 +1452,9 @@ class TerrainNavModule(mp_module.MPModule):
 
     # TODO: onboard computer tasks
     def run_planned_rtl(self):
+        """
+        thread: main_loop
+        """
         if not self.terrainnav_settings.onboard_computer_mode:
             return
 
@@ -1439,6 +1484,7 @@ class TerrainNavModule(mp_module.MPModule):
         elif self._planned_rtl_planner_status == "INVALID_GOAL":
             return
         elif self._planned_rtl_planner_status == "PENDING":
+            print("[terrainnav] PLANNED_RTL planner calculating...")
             return
         elif self._planned_rtl_planner_status == "PLANNER_EXCEPTION":
             return
@@ -1446,22 +1492,24 @@ class TerrainNavModule(mp_module.MPModule):
             print("[terrainnav] PLANNED_RTL found solution")
 
             # check path is valid
-            if not self._candidate_path.is_valid:
-                print(f"[terrain_nav] invalid path")
+            # TODO: Path.is_valid is not set correctly? Fix upstream
+            if not self._candidate_path._segments:
+                print(f"[terrain_nav] PLANNED_RTL invalid path")
                 self._planned_rtl_planner_status = None
                 return
 
             # update waypoints
+            print("[terrainnav] PLANNED_RTL generating waypoints")
             self.generate_waypoints(append=True)
 
             # TODO: for debugging when the map is visible - list waypoints
             wp_module = self.module("wp")
             if wp_module is None:
                 return
-            wp_module.cmd_list(None)
 
             # jump to first planned RTL waypoint
             # PLANNED_RTL> wp set <wpindex>
+            print("[terrainnav] PLANNED_RTL jump to first return waypoint")
             wp_module.cmd_set([self._planned_rtl_jump_to_wp])
 
             # switch mode
@@ -1469,6 +1517,7 @@ class TerrainNavModule(mp_module.MPModule):
             mode_module = self.module("mode")
             if mode_module is None:
                 return
+            print("[terrainnav] PLANNED_RTL set mode to AUTO")
             mode_module.cmd_mode(["AUTO"])
             return
 
@@ -1476,9 +1525,9 @@ class TerrainNavModule(mp_module.MPModule):
         if self._planned_rtl_remaining_retries > 0:
             self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
             self._planned_rtl_remaining_retries -= 1
-        else:
-            print(
-                f"[terrainnav] "
-                f"PLANNED_RTL failed to find solution after "
-                f"{self._planned_rtl_max_retries} attempts"
-            )
+        # else:
+        #     print(
+        #         f"[terrainnav] "
+        #         f"PLANNED_RTL failed to find solution after "
+        #         f"{self._planned_rtl_max_retries} attempts"
+        #     )
