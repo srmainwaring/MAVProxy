@@ -1534,14 +1534,20 @@ class TerrainNavModule(mp_module.MPModule):
             # check path is valid
             # TODO: Path.is_valid is not set correctly? Fix upstream
             if not self._candidate_path._segments:
-                print(f"[terrain_nav] PLANNED_RTL invalid path")
+                print(f"[terrainnav] PLANNED_RTL invalid path")
                 self._planned_rtl_planner_status = None
                 return
 
             # update waypoints
             print("[terrainnav] PLANNED_RTL generating waypoints")
             self.generate_waypoints(append=True)
+            self._planned_rtl_planner_status = "LOADING_WAYPOINTS"
+            return
 
+        elif self._planned_rtl_planner_status == "LOADING_WAYPOINTS":
+            # confirm that waypoints are uploaded
+            if wp_module.loading_waypoints:
+                return
 
             # jump to first planned RTL waypoint
             # PLANNED_RTL> wp set <wpindex>
@@ -1555,15 +1561,12 @@ class TerrainNavModule(mp_module.MPModule):
                 return
             print("[terrainnav] PLANNED_RTL set mode to AUTO")
             mode_module.cmd_mode(["AUTO"])
+            self._planned_rtl_planner_status = "IDLE"
             return
-
-        # Run planner if retries left
-        if self._planned_rtl_remaining_retries > 0:
-            self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
-            self._planned_rtl_remaining_retries -= 1
-        # else:
-        #     print(
-        #         f"[terrainnav] "
-        #         f"PLANNED_RTL failed to find solution after "
-        #         f"{self._planned_rtl_max_retries} attempts"
-        #     )
+        elif self._planned_rtl_planner_status == "IDLE":
+            return
+        else:
+            # Run planner if retries left
+            if self._planned_rtl_remaining_retries > 0:
+                self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
+                self._planned_rtl_remaining_retries -= 1
