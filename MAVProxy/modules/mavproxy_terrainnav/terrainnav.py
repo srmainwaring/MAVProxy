@@ -160,11 +160,22 @@ class TerrainNavModule(mp_module.MPModule):
 
         # *** wp, fence, rally state ***
         self._wp_have_requested_list = False
-        self._fence_have_requested_list = False
-        self._rally_have_requested_list = False
         self._wp_change_time = 0
+        self._wp_request_timeout = 1.0
+        self._wp_request_sent_time = 0
+        self._wp_request_ack_time = 0.0
+
+        self._fence_have_requested_list = False
         self._fence_change_time = 0
+        self._fence_request_timeout = 1.0
+        self._fence_request_sent_time = 0
+        self._fence_request_ack_time = 0.0
+
+        self._rally_have_requested_list = False
         self._rally_change_time = 0
+        self._rally_request_timeout = 1.0
+        self._rally_request_sent_time = 0
+        self._rally_request_ack_time = 0.0
 
         # *** planner multiprocessing ***
         self._planner_process = None
@@ -178,6 +189,7 @@ class TerrainNavModule(mp_module.MPModule):
         self.terrainnav_settings.set_callback(setting_cb)
 
         # *** onboard computer settings (PLANNED_RTL) ***
+        self._planned_rtl_detected_vehicle = False
         self._planned_rtl_enabled = False
         self._planned_rtl_max_retries = 5
         self._planned_rtl_remaining_retries = self._planned_rtl_max_retries
@@ -193,11 +205,24 @@ class TerrainNavModule(mp_module.MPModule):
 
         thread: main_loop
         """
+        # require that waypoint, fence and rally modules be available
+        wp_module = self.module("wp")
+        if wp_module is None:
+            return
+        fence_module = self.module("fence")
+        if fence_module is None:
+            return
+        rally_module = self.module("rally")
+        if rally_module is None:
+            return
 
         # onboard computer mode only
-        if msg and self.terrainnav_settings.onboard_computer_mode == True:
+        if msg and self.terrainnav_settings.onboard_computer_mode:
             mtype = msg.get_type()
-            if mtype == "HEARTBEAT":
+            if mtype in ["HEARTBEAT"] and msg.type != mavutil.mavlink.MAV_TYPE_GCS:
+                # vehicle has been detected, can now download waypoints
+                self._planned_rtl_detected_vehicle = True
+
                 # Mode changes are reflected in the custom_mode field of HEARTBEAT
                 if msg.custom_mode == MODE_NUMBER_PLANNED_RTL:
                     if not self._planned_rtl_enabled:
@@ -217,7 +242,7 @@ class TerrainNavModule(mp_module.MPModule):
                         )
                         self._planned_rtl_planner_status = None
                         self._planned_rtl_jump_to_wp = 0
-            elif mtype == "POSITION_TARGET_GLOBAL_INT":
+            elif mtype in ["POSITION_TARGET_GLOBAL_INT"]:
                 # LOITER for plane / quadplane
                 # TODO: check the type_mask (POSITION_TARGET_TYPEMASK) for valid fields
                 # TODO: determine the loiter orientation
@@ -228,7 +253,7 @@ class TerrainNavModule(mp_module.MPModule):
                         self._parent_pipe_send.send(
                             tp.PlannerStartLatLon((loiter_lat, loiter_lon))
                         )
-            elif mtype == "GLOBAL_POSITION_INT":
+            elif mtype in ["GLOBAL_POSITION_INT"]:
                 # LOITER for copter
                 if self._planned_rtl_enabled:
                     if self.start_latlon is None:
@@ -237,25 +262,36 @@ class TerrainNavModule(mp_module.MPModule):
                         self._parent_pipe_send.send(
                             tp.PlannerStartLatLon((loiter_lat, loiter_lon))
                         )
-
-            # ensure waypoints etc are listed once
-            if not self._wp_have_requested_list:
-                wp_module = self.module("wp")
-                if wp_module is not None:
+            elif mtype in ["MISSION_COUNT"]:
+                # waypoint download request acks
+                mission_type = getattr(msg, "mission_type", 0)
+                if mission_type == wp_module.mav_mission_type():
+                    self._wp_request_ack_time = time.time()
+                elif mission_type == fence_module.mav_mission_type():
+                    self._fence_request_ack_time = time.time()
+                elif mission_type == rally_module.mav_mission_type():
+                    self._rally_request_ack_time = time.time()
+                
+        # ensure waypoints etc are listed once the vehicle is detected
+        if self._planned_rtl_detected_vehicle:
+            # waypoint download - wp module has no timer to check ack
+            if self._wp_request_ack_time - self._wp_request_sent_time <= 0:
+                if (time.time() - self._wp_request_sent_time) > self._wp_request_timeout:
+                    print("[terrainnav] requesting waypoints")
                     wp_module.cmd_list([None])
-                    self._wp_have_requested_list = True
+                    self._wp_request_sent_time = time.time()
 
-            if not self._fence_have_requested_list:
-                fence_module = self.module("fence")
-                if fence_module is not None:
+            if self._fence_request_ack_time - self._fence_request_sent_time <= 0:
+                if (time.time() - self._fence_request_sent_time) > self._fence_request_timeout:
+                    print("[terrainnav] requesting fences")
                     fence_module.cmd_list([None])
-                    self._fence_have_requested_list = True
+                    self._fence_request_sent_time = time.time()
 
-            if not self._rally_have_requested_list:
-                rally_module = self.module("rally")
-                if rally_module is not None:
+            if self._rally_request_ack_time - self._rally_request_sent_time <= 0:
+                if (time.time() - self._rally_request_sent_time) > self._rally_request_timeout:
+                    print("[terrainnav] requesting rally points")
                     rally_module.cmd_list([None])
-                    self._rally_have_requested_list = True
+                    self._rally_request_sent_time = time.time()
 
         # TODO: following mavproxy_map which monitors fence updates in
         #       mavlink_packet rather than idle_task
@@ -280,14 +316,14 @@ class TerrainNavModule(mp_module.MPModule):
         # process messages from the UI
         self.process_ui_msgs()
 
+        # process messages from the planner
+        self.process_planner_msgs()
+
         # run onboard computer tasks
         if (time.time() - self._planned_rtl_last_time) > self._planned_rtl_send_delay:
             if self.terrainnav_settings.onboard_computer_mode:
                 self.run_planned_rtl()
             self._planned_rtl_last_time = time.time()
-
-        # process messages from the planner
-        self.process_planner_msgs()
 
         # send message list via pipe to UI at desired update rate
         if (time.time() - self._last_send) > self._send_delay:
@@ -1406,8 +1442,7 @@ class TerrainNavModule(mp_module.MPModule):
         # NOTE: see: mavproxy_map check_redisplay_fencepoints
         wp_module = self.module("wp")
         if wp_module is not None:
-            last_change = wp_module.wploader.last_change
-
+            last_change = wp_module.last_change()
             if self._wp_change_time != last_change:
                 self._wp_change_time = last_change
                 # print("[terrainnav] waypoints changed")
@@ -1419,8 +1454,7 @@ class TerrainNavModule(mp_module.MPModule):
         # NOTE: see: mavproxy_map check_redisplay_fencepoints
         rally_module = self.module("rally")
         if rally_module is not None:
-            last_change = rally_module.wploader.last_change
-
+            last_change = rally_module.last_change()
             if self._rally_change_time != last_change:
                 self._rally_change_time = last_change
                 # print("[terrainnav] rally points changed")
@@ -1432,12 +1466,7 @@ class TerrainNavModule(mp_module.MPModule):
         # NOTE: see: mavproxy_map check_redisplay_fencepoints
         fence_module = self.module("fence")
         if fence_module is not None:
-            if hasattr(fence_module, "last_change"):
-                # new fence module
-                last_change = fence_module.last_change()
-            else:
-                # old fence module
-                last_change = fence_module.fenceloader.last_change
+            last_change = fence_module.last_change()
             if self._fence_change_time != last_change:
                 self._fence_change_time = last_change
                 # print("[terrainnav] fences changed")
@@ -1455,10 +1484,21 @@ class TerrainNavModule(mp_module.MPModule):
         """
         thread: main_loop
         """
-        if not self.terrainnav_settings.onboard_computer_mode:
+        if not self._planned_rtl_enabled:
             return
 
-        if not self._planned_rtl_enabled:
+        # Check we have waypoint, fence, and rally lists
+        wp_module = self.module("wp")
+        if wp_module is None or wp_module.last_change() == 0:
+            print("[terrainnav] PLANNED_RTL waiting for wp list")
+            return
+        fence_module = self.module("fence")
+        if fence_module is None or fence_module.last_change() == 0:
+            print("[terrainnav] PLANNED_RTL waiting for fence list")
+            return
+        rally_module = self.module("rally")
+        if rally_module is None or rally_module.last_change() == 0:
+            print("[terrainnav] PLANNED_RTL waiting for rally list")
             return
 
         # Check start is valid
@@ -1502,10 +1542,6 @@ class TerrainNavModule(mp_module.MPModule):
             print("[terrainnav] PLANNED_RTL generating waypoints")
             self.generate_waypoints(append=True)
 
-            # TODO: for debugging when the map is visible - list waypoints
-            wp_module = self.module("wp")
-            if wp_module is None:
-                return
 
             # jump to first planned RTL waypoint
             # PLANNED_RTL> wp set <wpindex>
