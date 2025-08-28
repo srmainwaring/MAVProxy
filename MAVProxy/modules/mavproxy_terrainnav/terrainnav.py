@@ -6,6 +6,7 @@ import math
 import sys
 import time
 
+from enum import Enum
 from functools import partial
 
 from MAVProxy.mavproxy import MPState
@@ -75,6 +76,25 @@ class TerrainNavModule(mp_module.MPModule):
                 MPSetting("wp_add_goal_loiter", bool, True),
             ]
         )
+
+    class State(Enum):
+        """
+        Enum class for the PlannedRTL state machine
+        """
+
+        IDLE = 1
+        WAIT_VALID_LISTS = 2
+        SET_START = 3
+        WAIT_VALID_START = 4
+        SET_GOAL = 5
+        WAIT_VALID_GOAL = 6
+        RUN_PLAN = 7
+        WAIT_VALID_PLAN = 8
+        SEND_WAYPOINTS = 9
+        WAIT_ACK_WAYPOINTS = 10
+        SET_RTL_WAYPOINT = 11
+        SWITCH_MODE = 12
+        DONE = 13
 
     def __init__(self, mpstate: MPState) -> None:
         """
@@ -189,14 +209,30 @@ class TerrainNavModule(mp_module.MPModule):
         self.terrainnav_settings.set_callback(setting_cb)
 
         # *** onboard computer settings (PLANNED_RTL) ***
+
         self._planned_rtl_detected_vehicle = False
         self._planned_rtl_enabled = False
         self._planned_rtl_max_retries = 5
         self._planned_rtl_remaining_retries = self._planned_rtl_max_retries
         self._planned_rtl_planner_status = None
+        self._planned_rtl_state = TerrainNavModule.State.IDLE
         # allow time for planner to respond
-        self._planned_rtl_send_delay = 1.0
+        self._planned_rtl_update_period = 0.1
         self._planned_rtl_last_time = 0.0
+        self._planned_rtl_jump_to_wp = 0
+
+    def reset_planned_rtl_state(self):
+        """
+        Reset the PLANNED_RTL state
+        """
+        self._candidate_path = None
+        self.start_latlon = None
+        self.goal_latlon = None
+
+        self._planned_rtl_remaining_retries = self._planned_rtl_max_retries
+        self._planned_rtl_planner_status = None
+        self._planned_rtl_state = TerrainNavModule.State.IDLE
+        self._planned_rtl_remaining_retries = self._planned_rtl_max_retries
         self._planned_rtl_jump_to_wp = 0
 
     def mavlink_packet(self, msg) -> None:
@@ -228,20 +264,12 @@ class TerrainNavModule(mp_module.MPModule):
                     if not self._planned_rtl_enabled:
                         print("PLANNED_RTL: ON")
                         self._planned_rtl_enabled = True
+                        self.reset_planned_rtl_state()
                 else:
                     if self._planned_rtl_enabled:
                         print("PLANNED_RTL: OFF")
-                        # Reset start and goal positions
-                        # TODO: add a reset method
-                        self._candidate_path = None
-                        self.start_latlon = None
-                        self.goal_latlon = None
                         self._planned_rtl_enabled = False
-                        self._planned_rtl_remaining_retries = (
-                            self._planned_rtl_max_retries
-                        )
-                        self._planned_rtl_planner_status = None
-                        self._planned_rtl_jump_to_wp = 0
+                        self.reset_planned_rtl_state()
             elif mtype in ["POSITION_TARGET_GLOBAL_INT"]:
                 # LOITER for plane / quadplane
                 # TODO: check the type_mask (POSITION_TARGET_TYPEMASK) for valid fields
@@ -271,24 +299,30 @@ class TerrainNavModule(mp_module.MPModule):
                     self._fence_request_ack_time = time.time()
                 elif mission_type == rally_module.mav_mission_type():
                     self._rally_request_ack_time = time.time()
-                
+
         # ensure waypoints etc are listed once the vehicle is detected
         if self._planned_rtl_detected_vehicle:
             # waypoint download - wp module has no timer to check ack
             if self._wp_request_ack_time - self._wp_request_sent_time <= 0:
-                if (time.time() - self._wp_request_sent_time) > self._wp_request_timeout:
+                if (
+                    time.time() - self._wp_request_sent_time
+                ) > self._wp_request_timeout:
                     print("[terrainnav] requesting waypoints")
                     wp_module.cmd_list([None])
                     self._wp_request_sent_time = time.time()
 
             if self._fence_request_ack_time - self._fence_request_sent_time <= 0:
-                if (time.time() - self._fence_request_sent_time) > self._fence_request_timeout:
+                if (
+                    time.time() - self._fence_request_sent_time
+                ) > self._fence_request_timeout:
                     print("[terrainnav] requesting fences")
                     fence_module.cmd_list([None])
                     self._fence_request_sent_time = time.time()
 
             if self._rally_request_ack_time - self._rally_request_sent_time <= 0:
-                if (time.time() - self._rally_request_sent_time) > self._rally_request_timeout:
+                if (
+                    time.time() - self._rally_request_sent_time
+                ) > self._rally_request_timeout:
                     print("[terrainnav] requesting rally points")
                     rally_module.cmd_list([None])
                     self._rally_request_sent_time = time.time()
@@ -320,10 +354,12 @@ class TerrainNavModule(mp_module.MPModule):
         self.process_planner_msgs()
 
         # run onboard computer tasks
-        if (time.time() - self._planned_rtl_last_time) > self._planned_rtl_send_delay:
-            if self.terrainnav_settings.onboard_computer_mode:
+        if self.terrainnav_settings.onboard_computer_mode:
+            if (
+                time.time() - self._planned_rtl_last_time
+            ) > self._planned_rtl_update_period:
                 self.run_planned_rtl()
-            self._planned_rtl_last_time = time.time()
+                self._planned_rtl_last_time = time.time()
 
         # send message list via pipe to UI at desired update rate
         if (time.time() - self._last_send) > self._send_delay:
@@ -1487,86 +1523,131 @@ class TerrainNavModule(mp_module.MPModule):
         if not self._planned_rtl_enabled:
             return
 
-        # Check we have waypoint, fence, and rally lists
         wp_module = self.module("wp")
-        if wp_module is None or wp_module.last_change() == 0:
-            print("[terrainnav] PLANNED_RTL waiting for wp list")
+        if wp_module is None:
             return
         fence_module = self.module("fence")
-        if fence_module is None or fence_module.last_change() == 0:
-            print("[terrainnav] PLANNED_RTL waiting for fence list")
+        if fence_module is None:
             return
         rally_module = self.module("rally")
-        if rally_module is None or rally_module.last_change() == 0:
-            print("[terrainnav] PLANNED_RTL waiting for rally list")
+        if rally_module is None:
             return
 
-        # Check start is valid
-        if self.start_latlon is None:
+        if self._planned_rtl_state == TerrainNavModule.State.IDLE:
+            self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_LISTS
             return
-
-        if self.goal_latlon is None:
-            wp_module = self.module("wp")
-            if wp_module is None:
+        elif self._planned_rtl_state == TerrainNavModule.State.WAIT_VALID_LISTS:
+            # Check we have waypoint, fence, and rally lists
+            if wp_module.last_change() == 0 or wp_module.loading_waypoints:
+                print("[terrainnav] PLANNED_RTL waiting for wp list")
                 return
+            if fence_module.last_change() == 0 or fence_module.loading_waypoints:
+                print("[terrainnav] PLANNED_RTL waiting for fence list")
+                return
+            if rally_module.last_change() == 0 or rally_module.loading_waypoints:
+                print("[terrainnav] PLANNED_RTL waiting for rally list")
+                return
+
+            self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_START
+            return
+        elif self._planned_rtl_state == TerrainNavModule.State.WAIT_VALID_START:
+            # Start is set in mavlink_packet when loiter position is received
+            # Wait for planner to confirm start is valid
+            if self.start_latlon is not None:
+                self._planned_rtl_state = TerrainNavModule.State.SET_GOAL
+            return
+        elif self._planned_rtl_state == TerrainNavModule.State.SET_GOAL:
+            # Get goal position
+            # TODO: use HOME, but should use rally if available
             home = wp_module.get_home()
             if home is None:
                 return
 
-            # Get goal position
-            # TODO: use HOME, but should use rally if available
             self._parent_pipe_send.send(tp.PlannerGoalLatLon((home.x, home.y)))
+            self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_GOAL
             return
-
-        # Check status
-        if self._planned_rtl_planner_status == "INVALID_START":
+        elif self._planned_rtl_state == TerrainNavModule.State.WAIT_VALID_GOAL:
+            # Wait for planner to confirm goal is valid
+            if self.goal_latlon is not None:
+                self._planned_rtl_state = TerrainNavModule.State.RUN_PLAN
             return
-        elif self._planned_rtl_planner_status == "INVALID_GOAL":
-            return
-        elif self._planned_rtl_planner_status == "PENDING":
-            print("[terrainnav] PLANNED_RTL planner calculating...")
-            return
-        elif self._planned_rtl_planner_status == "PLANNER_EXCEPTION":
-            return
-        elif self._planned_rtl_planner_status == "OK":
-            print("[terrainnav] PLANNED_RTL found solution")
-
-            # check path is valid
-            # TODO: Path.is_valid is not set correctly? Fix upstream
-            if not self._candidate_path._segments:
-                print(f"[terrainnav] PLANNED_RTL invalid path")
-                self._planned_rtl_planner_status = None
+        elif self._planned_rtl_state == TerrainNavModule.State.RUN_PLAN:
+            # Check planner status
+            if self._planned_rtl_planner_status == "INVALID_START":
+                self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_START
+                return
+            elif self._planned_rtl_planner_status == "INVALID_GOAL":
+                self._planned_rtl_state = TerrainNavModule.State.SET_GOAL
+                return
+            elif self._planned_rtl_planner_status == "PENDING":
+                self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_PLAN
+                return
+            elif self._planned_rtl_planner_status == "PLANNER_EXCEPTION":
+                # TODO: switch back to AUTO if planner fails...
+                self._planned_rtl_state = TerrainNavModule.State.DONE
+                return
+            elif self._planned_rtl_planner_status == "OK":
+                self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_PLAN
                 return
 
+            # Run planner if retries left
+            if self._planned_rtl_remaining_retries > 0:
+                self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
+                self._planned_rtl_planner_status = "PENDING"
+                self._planned_rtl_remaining_retries -= 1
+                self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_PLAN
+            else:
+                # TODO: switch back to AUTO if planner fails...
+                self._planned_rtl_state = TerrainNavModule.State.DONE
+            return
+
+        elif self._planned_rtl_state == TerrainNavModule.State.WAIT_VALID_PLAN:
+
+            if self._planned_rtl_planner_status == "PENDING":
+                self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_PLAN
+                return
+            elif self._planned_rtl_planner_status == "PLANNER_EXCEPTION":
+                self._planned_rtl_state = TerrainNavModule.State.DONE
+                return
+            elif self._planned_rtl_planner_status == "OK":
+                # print("[terrainnav] PLANNED_RTL found solution")
+                # check path is valid
+                # TODO: Path.is_valid is not set correctly? Fix upstream
+                if not self._candidate_path._segments:
+                    print(f"[terrainnav] PLANNED_RTL invalid path")
+                    self._planned_rtl_planner_status = None
+                    self._planned_rtl_state = TerrainNavModule.State.RUN_PLAN
+                else:
+                    self._planned_rtl_state = TerrainNavModule.State.SEND_WAYPOINTS
+                return
+            else:
+                # TODO: Should never get here - report error and stop
+                self._planned_rtl_state = TerrainNavModule.State.DONE
+                return
+        elif self._planned_rtl_state == TerrainNavModule.State.SEND_WAYPOINTS:
             # update waypoints
             print("[terrainnav] PLANNED_RTL generating waypoints")
             self.generate_waypoints(append=True)
-            self._planned_rtl_planner_status = "LOADING_WAYPOINTS"
+            self._planned_rtl_state = TerrainNavModule.State.WAIT_ACK_WAYPOINTS
             return
-
-        elif self._planned_rtl_planner_status == "LOADING_WAYPOINTS":
-            # confirm that waypoints are uploaded
-            if wp_module.loading_waypoints:
-                return
-
-            # jump to first planned RTL waypoint
-            # PLANNED_RTL> wp set <wpindex>
+        elif self._planned_rtl_state == TerrainNavModule.State.WAIT_ACK_WAYPOINTS:
+            if not wp_module.loading_waypoints:
+                self._planned_rtl_state = TerrainNavModule.State.SET_RTL_WAYPOINT
+            return
+        elif self._planned_rtl_state == TerrainNavModule.State.SET_RTL_WAYPOINT:
+            # jump to first planned RTL waypoint: PLANNED_RTL> wp set <wpindex>
             print("[terrainnav] PLANNED_RTL jump to first return waypoint")
             wp_module.cmd_set([self._planned_rtl_jump_to_wp])
-
-            # switch mode
-            # PLANNED_RTL> auto
+            self._planned_rtl_state = TerrainNavModule.State.SWITCH_MODE
+            return
+        elif self._planned_rtl_state == TerrainNavModule.State.SWITCH_MODE:
+            # switch mode: PLANNED_RTL> auto
             mode_module = self.module("mode")
             if mode_module is None:
                 return
             print("[terrainnav] PLANNED_RTL set mode to AUTO")
             mode_module.cmd_mode(["AUTO"])
-            self._planned_rtl_planner_status = "IDLE"
+            self._planned_rtl_state = TerrainNavModule.State.DONE
             return
-        elif self._planned_rtl_planner_status == "IDLE":
+        elif self._planned_rtl_state == TerrainNavModule.State.DONE:
             return
-        else:
-            # Run planner if retries left
-            if self._planned_rtl_remaining_retries > 0:
-                self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
-                self._planned_rtl_remaining_retries -= 1
