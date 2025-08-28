@@ -184,18 +184,21 @@ class TerrainNavModule(mp_module.MPModule):
         self._wp_request_timeout = 1.0
         self._wp_request_sent_time = 0
         self._wp_request_ack_time = 0.0
+        self._wp_misson_ack_time = 0.0
 
         self._fence_have_requested_list = False
         self._fence_change_time = 0
         self._fence_request_timeout = 1.0
         self._fence_request_sent_time = 0
         self._fence_request_ack_time = 0.0
+        self._fence_mission_ack_time = 0.0
 
         self._rally_have_requested_list = False
         self._rally_change_time = 0
         self._rally_request_timeout = 1.0
         self._rally_request_sent_time = 0
         self._rally_request_ack_time = 0.0
+        self._rally_mission_ack_time = 0.0
 
         # *** planner multiprocessing ***
         self._planner_process = None
@@ -299,6 +302,16 @@ class TerrainNavModule(mp_module.MPModule):
                     self._fence_request_ack_time = time.time()
                 elif mission_type == rally_module.mav_mission_type():
                     self._rally_request_ack_time = time.time()
+            elif mtype in ["MISSION_ACK"]:
+                # should receive ack when download or upload completes
+                mission_type = getattr(msg, "mission_type", 0)
+                if mission_type == wp_module.mav_mission_type():
+                    self._wp_mission_ack_time = time.time()
+                elif mission_type == fence_module.mav_mission_type():
+                    self._fence_mission_ack_time = time.time()
+                elif mission_type == rally_module.mav_mission_type():
+                    self._rally_mission_ack_time = time.time()
+
 
         # ensure waypoints etc are listed once the vehicle is detected
         if self._planned_rtl_detected_vehicle:
@@ -1538,14 +1551,17 @@ class TerrainNavModule(mp_module.MPModule):
             return
         elif self._planned_rtl_state == TerrainNavModule.State.WAIT_VALID_LISTS:
             # Check we have waypoint, fence, and rally lists
-            if wp_module.last_change() == 0 or wp_module.loading_waypoints:
-                print("[terrainnav] PLANNED_RTL waiting for wp list")
+            # if wp_module.last_change() == 0 or wp_module.loading_waypoints:
+            if wp_module.wploader.count() != wp_module.wploader.expected_count:
+                print("[terrainnav] PLANNED_RTL waiting for wp download")
                 return
-            if fence_module.last_change() == 0 or fence_module.loading_waypoints:
-                print("[terrainnav] PLANNED_RTL waiting for fence list")
+            # if fence_module.last_change() == 0 or fence_module.loading_waypoints:
+            if fence_module.wploader.count() != fence_module.wploader.expected_count:
+                print("[terrainnav] PLANNED_RTL waiting for fence download")
                 return
-            if rally_module.last_change() == 0 or rally_module.loading_waypoints:
-                print("[terrainnav] PLANNED_RTL waiting for rally list")
+            # if rally_module.last_change() == 0 or rally_module.loading_waypoints:
+            if rally_module.wploader.count() != rally_module.wploader.expected_count:
+                print("[terrainnav] PLANNED_RTL waiting for rally download")
                 return
 
             self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_START
@@ -1631,8 +1647,12 @@ class TerrainNavModule(mp_module.MPModule):
             self._planned_rtl_state = TerrainNavModule.State.WAIT_ACK_WAYPOINTS
             return
         elif self._planned_rtl_state == TerrainNavModule.State.WAIT_ACK_WAYPOINTS:
-            if not wp_module.loading_waypoints:
-                self._planned_rtl_state = TerrainNavModule.State.SET_RTL_WAYPOINT
+            # TODO: not sure that we can rely on this being set False?
+            # if not wp_module.loading_waypoints:
+            if wp_module.wploader.count() != wp_module.wploader.expected_count:
+                print("[terrainnav] PLANNED_RTL waiting for wp upload")
+                return
+            self._planned_rtl_state = TerrainNavModule.State.SET_RTL_WAYPOINT
             return
         elif self._planned_rtl_state == TerrainNavModule.State.SET_RTL_WAYPOINT:
             # jump to first planned RTL waypoint: PLANNED_RTL> wp set <wpindex>
