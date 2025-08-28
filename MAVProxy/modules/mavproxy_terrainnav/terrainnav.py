@@ -312,7 +312,6 @@ class TerrainNavModule(mp_module.MPModule):
                 elif mission_type == rally_module.mav_mission_type():
                     self._rally_mission_ack_time = time.time()
 
-
         # ensure waypoints etc are listed once the vehicle is detected
         if self._planned_rtl_detected_vehicle:
             # waypoint download - wp module has no timer to check ack
@@ -1608,8 +1607,10 @@ class TerrainNavModule(mp_module.MPModule):
 
             # Run planner if retries left
             if self._planned_rtl_remaining_retries > 0:
-                self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
+                # reset candidate path and mark as pending
+                self._candidate_path = None
                 self._planned_rtl_planner_status = "PENDING"
+                self._parent_pipe_send.send(tp.PlannerCmdRunPlanner())
                 self._planned_rtl_remaining_retries -= 1
                 self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_PLAN
             else:
@@ -1629,13 +1630,17 @@ class TerrainNavModule(mp_module.MPModule):
                 # print("[terrainnav] PLANNED_RTL found solution")
                 # check path is valid
                 # TODO: Path.is_valid is not set correctly? Fix upstream
-                if not self._candidate_path._segments:
+                if self._candidate_path is None:
+                    # waiting to receive path from planner
+                    return
+                elif not self._candidate_path._segments:
                     print(f"[terrainnav] PLANNED_RTL invalid path")
                     self._planned_rtl_planner_status = None
                     self._planned_rtl_state = TerrainNavModule.State.RUN_PLAN
+                    return
                 else:
                     self._planned_rtl_state = TerrainNavModule.State.SEND_WAYPOINTS
-                return
+                    return
             else:
                 # TODO: Should never get here - report error and stop
                 self._planned_rtl_state = TerrainNavModule.State.DONE
@@ -1650,8 +1655,16 @@ class TerrainNavModule(mp_module.MPModule):
             # TODO: not sure that we can rely on this being set False?
             # if not wp_module.loading_waypoints:
             if wp_module.wploader.count() != wp_module.wploader.expected_count:
-                print("[terrainnav] PLANNED_RTL waiting for wp upload")
+                print(
+                    f"[terrainnav] PLANNED_RTL "
+                    f"uploaded {wp_module.wploader.count()} "
+                    f" of {wp_module.wploader.expected_count} waypoints"
+                )
                 return
+            print(
+                f"[terrainnav] PLANNED_RTL "
+                f"uploaded {wp_module.wploader.count()} waypoints"
+            )
             self._planned_rtl_state = TerrainNavModule.State.SET_RTL_WAYPOINT
             return
         elif self._planned_rtl_state == TerrainNavModule.State.SET_RTL_WAYPOINT:
