@@ -1577,8 +1577,26 @@ class TerrainNavModule(mp_module.MPModule):
             home = wp_module.get_home()
             if home is None:
                 return
+            goal_x = home.x
+            goal_y = home.y
 
-            self._parent_pipe_send.send(tp.PlannerGoalLatLon((home.x, home.y)))
+            # Do we have a rally point?
+            # TODO: calculate closest rally point
+            if rally_module.rally_count():
+                rally_item = rally_module.wploader.item(0)
+                goal_x = rally_item.x
+                goal_y = rally_item.y
+                print(
+                    f"[terrainnav] PLANNED_RTL "
+                    f"setting goal to first rally ({goal_x}, {goal_y})"
+                )
+            else:
+                print(
+                    f"[terrainnav] PLANNED_RTL "
+                    f"setting goal to home ({goal_x}, {goal_y})"
+                )
+
+            self._parent_pipe_send.send(tp.PlannerGoalLatLon((goal_x, goal_y)))
             self._planned_rtl_state = TerrainNavModule.State.WAIT_VALID_GOAL
             return
         elif self._planned_rtl_state == TerrainNavModule.State.WAIT_VALID_GOAL:
