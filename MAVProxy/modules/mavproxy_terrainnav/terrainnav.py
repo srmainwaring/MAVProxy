@@ -1177,50 +1177,53 @@ class TerrainNavModule(mp_module.MPModule):
                 )
 
             pass_radius = 0.0
+            use_loiter = False
 
             if curvature != 0.0:
                 # curvature in ENU, CCW is negative, CW is positive
                 pass_radius = 1.0 if curvature < 0 else -1.0
 
-                # do not add a loiter for short turns
+                # do not add a loiter for short turns, use a waypoint at
+                # the end of the arc instead so its altitude is kept
                 radius = 1.0 / math.fabs(curvature)
                 phi = segment_length / radius
                 min_phi = math.radians(self.terrainnav_settings.wp_min_loiter_angle_deg)
+                use_loiter = phi >= min_phi
 
-                if phi >= min_phi:
-                    arc_centre = PathSegment.get_arc_centre(
-                        position2, tangent2, curvature
-                    )
-                    (cen_lat, cen_lon) = mp_util.gps_offset(
-                        map_lat,
-                        map_lon,
-                        arc_centre.x,
-                        arc_centre.y,
-                    )
+            if use_loiter:
+                arc_centre = PathSegment.get_arc_centre(
+                    position2, tangent2, curvature
+                )
+                (cen_lat, cen_lon) = mp_util.gps_offset(
+                    map_lat,
+                    map_lon,
+                    arc_centre.x,
+                    arc_centre.y,
+                )
 
-                    # MAV_CMD_NAV_LOITER_TO_ALT (31)
-                    p1 = 1.0  # heading required: 0: no, 1: yes
-                    p2 = -1.0 / curvature  # radius: > 0 loiter CW, < 0 loiter CCW
-                    p3 = 0.0
-                    p4 = 1.0  # loiter exit location: 1: line between exit and next wp.
-                    mission_item = mavutil.mavlink.MAVLink_mission_item_message(
-                        target_system=sys_id,
-                        target_component=cmp_id,
-                        seq=wp_num,
-                        frame=wp_frame,
-                        command=mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT,
-                        current=0,
-                        autocontinue=1,
-                        param1=p1,
-                        param2=p2,
-                        param3=p3,
-                        param4=p4,
-                        x=cen_lat,
-                        y=cen_lon,
-                        z=end_alt,
-                    )
-                    mission_items.append(mission_item)
-                    wp_num += 1
+                # MAV_CMD_NAV_LOITER_TO_ALT (31)
+                p1 = 1.0  # heading required: 0: no, 1: yes
+                p2 = -1.0 / curvature  # radius: > 0 loiter CW, < 0 loiter CCW
+                p3 = 0.0
+                p4 = 1.0  # loiter exit location: 1: line between exit and next wp.
+                mission_item = mavutil.mavlink.MAVLink_mission_item_message(
+                    target_system=sys_id,
+                    target_component=cmp_id,
+                    seq=wp_num,
+                    frame=wp_frame,
+                    command=mavutil.mavlink.MAV_CMD_NAV_LOITER_TO_ALT,
+                    current=0,
+                    autocontinue=1,
+                    param1=p1,
+                    param2=p2,
+                    param3=p3,
+                    param4=p4,
+                    x=cen_lat,
+                    y=cen_lon,
+                    z=end_alt,
+                )
+                mission_items.append(mission_item)
+                wp_num += 1
             else:
                 # mission item MAV_CMD_NAV_WAYPOINT (16)
                 p1 = 0.0  # hold
